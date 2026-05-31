@@ -3,14 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "memorygrad"
+name = "gradient-descent-memory"
 version = "0.1.0"
-description = "Passive gradient memory for coding agents."
+description = "Self-improving memory for coding agents."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 authors = [
-  { name = "MemoryGrad contributors" }
+  { name = "Gradient Descent Memory contributors" }
 ]
 dependencies = []
 
