@@ -68,33 +68,30 @@ pip install -e ".[dev]"
 
 ## Use
 
-One-time setup:
+Run the hourly prompt in a repo while you work:
 
 ```bash
-gradient-descent-memory start
+gradient-descent-memory auto --log session.log
 ```
 
-After an agent session:
+Use 30-minute prompts instead:
 
 ```bash
-gradient-descent-memory learn "Add /healthz" --log session.log
+gradient-descent-memory auto --log session.log --interval-minutes 30
+```
+
+Or ingest one finished session:
+
+```bash
+gradient-descent-memory learn "Add /healthz" --log session.log --review
+```
+
+The normal CLI surface is intentionally small:
+
+```bash
+gradient-descent-memory learn
+gradient-descent-memory auto
 gradient-descent-memory review
-```
-
-Non-interactive demo:
-
-```bash
-gradient-descent-memory learn "Add /healthz" --log session.log --accept-all
-```
-
-Useful options:
-
-```bash
-gradient-descent-memory start --optimizer codex
-gradient-descent-memory start --optimizer claude
-gradient-descent-memory start --targets core --min-confidence 0.90 --global-min-confidence 0.97
-gradient-descent-memory sync --targets all
-gradient-descent-memory status
 ```
 
 For custom optimizers:

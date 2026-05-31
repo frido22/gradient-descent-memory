@@ -4,8 +4,9 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Iterator
 
-from gradient_descent_memory.cli import main
+from gradient_descent_memory.cli import build_parser, main
 from gradient_descent_memory.store import MemoryStore, global_memory_store
 
 
@@ -144,6 +145,32 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
     assert "!memory.md" in gitignore
     assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
     assert not (target / "CLAUDE.md").exists()
+
+
+def test_auto_once_prompts_and_reviews(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    set_optimizer(monkeypatch, tmp_path, route_response())
+    target = make_route_repo(tmp_path)
+    log = write_route_log(target)
+    register_health_route(target)
+    answers: Iterator[str] = iter(["Add /healthz", "a"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    assert main(["auto", "--repo", str(target), "--log", str(log), "--once"]) == 0
+
+    assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_default_help_shows_lean_command_surface() -> None:
+    help_text = build_parser().format_help()
+
+    assert "{learn,auto,review}" in help_text
+    assert "learn              Easy one-shot ingest" in help_text
+    assert "auto               Ask periodically" in help_text
+    assert "review             Review pending" in help_text
+    assert "init" not in help_text
+    assert "watch" not in help_text
+    assert "sync" not in help_text
+    assert "status" not in help_text
 
 
 def test_learn_uses_latest_commit_patch(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

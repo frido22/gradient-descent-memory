@@ -52,9 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="gradient-descent-memory",
         description="Self-improving memory for coding agents.",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{learn,auto,review}")
 
-    init = sub.add_parser("init", help="Initialize .gradient-descent-memory in a repo.")
+    init = sub.add_parser("init", help=argparse.SUPPRESS)
     init.add_argument("--repo", default=".", help="Target repo path.")
     init.add_argument(
         "--targets",
@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.set_defaults(func=cmd_init)
 
-    start = sub.add_parser("start", help="One-time easy setup.")
+    start = sub.add_parser("start", help=argparse.SUPPRESS)
     start.add_argument("--repo", default=None, help="Optional repo path for repo-local setup.")
     start.add_argument(
         "--targets",
@@ -122,18 +122,45 @@ def build_parser() -> argparse.ArgumentParser:
     learn.add_argument("task", nargs="?", default="", help="What the agent was trying to do.")
     learn.add_argument("--repo", default=".", help="Target repo path.")
     learn.add_argument("--log", "--terminal-log", dest="terminal_log", default="", help="Terminal/session log path.")
-    learn.add_argument("--agent", default="unknown", choices=AGENT_CHOICES, help="Agent label.")
-    learn.add_argument("--max-terminal-bytes", type=int, default=80_000, help="Maximum log bytes to ingest.")
-    learn.add_argument("--min-confidence", type=float, default=None, help="Override the configured proposal gate.")
-    learn.add_argument("--global-min-confidence", type=float, default=None, help="Override the global-memory gate.")
-    learn.add_argument("--optimizer", default=None, help="Override optimizer agent: auto, codex, claude.")
-    learn.add_argument("--optimizer-command", default=None, help="Custom optimizer command for this run.")
-    learn.add_argument("--max-edits", dest="max_edits_per_episode", type=int, default=None, help="Maximum edits.")
+    learn.add_argument("--agent", default="unknown", choices=AGENT_CHOICES, help=argparse.SUPPRESS)
+    learn.add_argument("--max-terminal-bytes", type=int, default=80_000, help=argparse.SUPPRESS)
+    learn.add_argument("--min-confidence", type=float, default=None, help=argparse.SUPPRESS)
+    learn.add_argument("--global-min-confidence", type=float, default=None, help=argparse.SUPPRESS)
+    learn.add_argument("--optimizer", default=None, help=argparse.SUPPRESS)
+    learn.add_argument("--optimizer-command", default=None, help=argparse.SUPPRESS)
+    learn.add_argument("--max-edits", dest="max_edits_per_episode", type=int, default=None, help=argparse.SUPPRESS)
     learn.add_argument("--review", action="store_true", help="Open interactive review after ingesting.")
     learn.add_argument("--accept-all", action="store_true", help="Accept high-confidence proposals after ingesting.")
     learn.set_defaults(func=cmd_learn)
 
-    watch = sub.add_parser("watch", help="Record an episode and propose repo memory.")
+    auto = sub.add_parser("auto", help="Ask periodically whether to learn from current work.")
+    auto.add_argument("--repo", default=".", help="Target repo path.")
+    auto.add_argument("--log", "--terminal-log", dest="terminal_log", default="", help="Terminal/session log path.")
+    auto.add_argument("--agent", default="unknown", choices=AGENT_CHOICES, help=argparse.SUPPRESS)
+    auto.add_argument(
+        "--interval-minutes",
+        type=float,
+        default=60.0,
+        help="Minutes between prompts. Default: 60.",
+    )
+    auto.add_argument("--max-terminal-bytes", type=int, default=80_000, help=argparse.SUPPRESS)
+    auto.add_argument("--min-confidence", type=float, default=None, help=argparse.SUPPRESS)
+    auto.add_argument("--global-min-confidence", type=float, default=None, help=argparse.SUPPRESS)
+    auto.add_argument("--optimizer", default=None, help=argparse.SUPPRESS)
+    auto.add_argument("--optimizer-command", default=None, help=argparse.SUPPRESS)
+    auto.add_argument("--max-edits", dest="max_edits_per_episode", type=int, default=None, help=argparse.SUPPRESS)
+    auto.add_argument("--accept-all", action="store_true", help="Accept high-confidence proposals after each prompt.")
+    auto.add_argument(
+        "--no-review",
+        dest="review",
+        action="store_false",
+        default=True,
+        help="Leave proposals pending instead of reviewing them after each prompt.",
+    )
+    auto.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
+    auto.set_defaults(func=cmd_auto)
+
+    watch = sub.add_parser("watch", help=argparse.SUPPRESS)
     watch.add_argument("--repo", default=".", help="Target repo path.")
     watch.add_argument("--task", default="", help="Task or intent for this coding episode.")
     watch.add_argument(
@@ -183,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--force", action="store_true", help="Allow accepting proposals below --min-confidence.")
     review.set_defaults(func=cmd_review)
 
-    sync = sub.add_parser("sync", help="Rewrite configured agent memory files from accepted memory.")
+    sync = sub.add_parser("sync", help=argparse.SUPPRESS)
     sync.add_argument("--repo", default=".", help="Target repo path.")
     sync.add_argument("--targets", default=None, help="Override configured sync targets.")
     sync.add_argument(
@@ -195,10 +222,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.set_defaults(func=cmd_sync)
 
-    status = sub.add_parser("status", help="Show Gradient Descent Memory episode and proposal counts.")
+    status = sub.add_parser("status", help=argparse.SUPPRESS)
     status.add_argument("--repo", default=".", help="Target repo path.")
     status.set_defaults(func=cmd_status)
 
+    sub._choices_actions = [action for action in sub._choices_actions if action.help != argparse.SUPPRESS]
     return parser
 
 
@@ -295,22 +323,50 @@ def cmd_learn(args: argparse.Namespace) -> int:
         min_confidence=min_confidence,
         global_min_confidence=global_min_confidence,
     )
-    if result != 0 or not (args.review or args.accept_all):
-        return result
+    return _review_after_ingest(args, repo, store, global_store, result)
 
-    review_args = argparse.Namespace(
-        repo=str(repo),
-        accept_all=args.accept_all,
-        reject_all=False,
-        accept=[],
-        reject=[],
-        min_confidence=args.min_confidence,
-        global_min_confidence=args.global_min_confidence,
-        targets=None,
-        max_active_memory=None,
-        force=False,
+
+def cmd_auto(args: argparse.Namespace) -> int:
+    if args.interval_minutes <= 0:
+        print("--interval-minutes must be greater than 0.", file=sys.stderr)
+        return 2
+    if not _valid_confidence(args.min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+    if not _valid_confidence(args.global_min_confidence):
+        print("--global-min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+
+    repo = discover_repo(Path(args.repo))
+    store = _ensure_repo_started(repo)
+    global_store = _ensure_global_started()
+    config = store.load_config()
+    min_confidence = _effective_confidence(args.min_confidence, config)
+    global_min_confidence = _effective_global_confidence(args.global_min_confidence, config)
+    if not _valid_confidence(min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+    if not _valid_confidence(global_min_confidence):
+        print("--global-min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+
+    interval_seconds = args.interval_minutes * 60
+    print(
+        f"Auto mode for {repo}. First prompt now, then every {args.interval_minutes:g} minute(s). "
+        "Ctrl-C to stop."
     )
-    return cmd_review(review_args)
+    while True:
+        result = _auto_prompt_once(
+            args,
+            repo,
+            store,
+            global_store,
+            min_confidence=min_confidence,
+            global_min_confidence=global_min_confidence,
+        )
+        if result != 0 or args.once:
+            return result
+        time.sleep(interval_seconds)
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -576,6 +632,51 @@ def _dedupe_drafts(drafts: list[ProposalDraft], store: MemoryStore, global_store
     return result
 
 
+def _auto_prompt_once(
+    args: argparse.Namespace,
+    repo: Path,
+    store: MemoryStore,
+    global_store: MemoryStore,
+    *,
+    min_confidence: float,
+    global_min_confidence: float,
+) -> int:
+    try:
+        task = input("What did the agent try? Empty=skip, q=quit: ").strip()
+    except EOFError:
+        print("Auto mode needs an interactive terminal.", file=sys.stderr)
+        return 2
+    if task.lower() in {"q", "quit", "exit"}:
+        print("Stopped auto mode.")
+        return 0
+    if not task:
+        print("Skipped.")
+        return 0
+
+    ingest_args = argparse.Namespace(
+        task=task,
+        agent=args.agent,
+        terminal_log=args.terminal_log,
+        max_terminal_bytes=args.max_terminal_bytes,
+        max_edits_per_episode=args.max_edits_per_episode,
+        optimizer=args.optimizer,
+        optimizer_command=args.optimizer_command,
+        review=args.review,
+        accept_all=args.accept_all,
+        min_confidence=args.min_confidence,
+        global_min_confidence=args.global_min_confidence,
+    )
+    result = _watch_once(
+        ingest_args,
+        repo,
+        store,
+        global_store,
+        min_confidence=min_confidence,
+        global_min_confidence=global_min_confidence,
+    )
+    return _review_after_ingest(ingest_args, repo, store, global_store, result)
+
+
 def _watch_once(
     args: argparse.Namespace,
     repo: Path,
@@ -674,6 +775,33 @@ def _watch_once(
     print()
     print("Run `gradient-descent-memory review` to accept or reject.")
     return 0
+
+
+def _review_after_ingest(
+    args: argparse.Namespace,
+    repo: Path,
+    store: MemoryStore,
+    global_store: MemoryStore,
+    result: int,
+) -> int:
+    if result != 0 or not (args.review or args.accept_all):
+        return result
+    if not _pending_proposals(store, global_store):
+        return result
+
+    review_args = argparse.Namespace(
+        repo=str(repo),
+        accept_all=args.accept_all,
+        reject_all=False,
+        accept=[],
+        reject=[],
+        min_confidence=args.min_confidence,
+        global_min_confidence=args.global_min_confidence,
+        targets=None,
+        max_active_memory=None,
+        force=False,
+    )
+    return cmd_review(review_args)
 
 
 def _store_for_scope(store: MemoryStore, global_store: MemoryStore, proposal: dict[str, object]) -> MemoryStore:
