@@ -47,7 +47,7 @@ class MemoryStore:
         save_config_fn: Any | None = None,
     ):
         self.root = root.expanduser().resolve()
-        self.base = (base or self.root / ".memorygrad").expanduser().resolve()
+        self.base = (base or self.root / ".gradient-descent-memory").expanduser().resolve()
         self.episodes_dir = self.base / "episodes"
         self.proposals_dir = self.base / "proposals"
         self.memory_path = self.base / "memory.md"
@@ -66,7 +66,7 @@ class MemoryStore:
         if config is not None or not self.config_path.exists():
             self._save_config_fn(config or default_config())
         if not self.memory_path.exists():
-            self.memory_path.write_text("# MemoryGrad Memory\n", encoding="utf-8")
+            self.memory_path.write_text("# Gradient Descent Memory\n", encoding="utf-8")
 
     def load_config(self) -> dict[str, Any]:
         return self._load_config_fn()

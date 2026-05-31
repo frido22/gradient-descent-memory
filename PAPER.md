@@ -1,10 +1,10 @@
-# MemoryGrad: Passive Gradient Memory for Coding Agents
+# Gradient Descent Memory: Passive Gradient Memory for Coding Agents
 
 ## Abstract
 
-Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. MemoryGrad is a lightweight system that turns normal coding-agent work into reviewed updates for persistent global and repo memory. It records coding episodes, asks the coding agent itself to act as a read-only memory optimizer, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `~/.memorygrad/memory.md`, and `.memorygrad/memory.md`.
+Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. Gradient Descent Memory is a lightweight system that turns normal coding-agent work into reviewed updates for persistent global and repo memory. It records coding episodes, asks the coding agent itself to act as a read-only memory optimizer, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `~/.gradient-descent-memory/memory.md`, and `.gradient-descent-memory/memory.md`.
 
-The design follows the core insight of SkillOpt: skills are external text state for frozen agents and should be improved with the discipline of an optimizer. MemoryGrad narrows that idea to practical software repositories, where the available evidence is terminal output, git diffs, test results, commits, and human or agent fixes.
+The design follows the core insight of SkillOpt: skills are external text state for frozen agents and should be improved with the discipline of an optimizer. Gradient Descent Memory narrows that idea to practical software repositories, where the available evidence is terminal output, git diffs, test results, commits, and human or agent fixes.
 
 ## Motivation
 
@@ -24,28 +24,28 @@ These failures are useful training signal, but only if they are converted into c
 
 SkillOpt frames natural-language skills as trainable external state for frozen agents. Its loop uses scored rollouts, optimizer-proposed add/delete/replace edits, bounded textual learning rates, held-out validation gates, rejected-edit buffers, and exported `best_skill.md` artifacts.
 
-MemoryGrad adopts the same optimizer mindset but changes the product surface:
+Gradient Descent Memory adopts the same optimizer mindset but changes the product surface:
 
 - SkillOpt optimizes a skill against benchmark splits.
-- MemoryGrad captures everyday coding sessions inside live repositories.
+- Gradient Descent Memory captures everyday coding sessions inside live repositories.
 - SkillOpt exports a benchmarked `best_skill.md`.
-- MemoryGrad proposes small patches to global and repo agent memory files such as `~/.memorygrad/memory.md`, `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/memory.md`.
+- Gradient Descent Memory proposes small patches to global and repo agent memory files such as `~/.gradient-descent-memory/memory.md`, `AGENTS.md`, `CLAUDE.md`, and `.gradient-descent-memory/memory.md`.
 - SkillOpt is active training.
-- MemoryGrad is passive repo memory with human review.
+- Gradient Descent Memory is passive repo memory with human review.
 
-This makes MemoryGrad complementary to SkillOpt rather than a replacement.
+This makes Gradient Descent Memory complementary to SkillOpt rather than a replacement.
 
 ## System
 
-MemoryGrad runs as:
+Gradient Descent Memory runs as:
 
 ```bash
-memorygrad init
-memorygrad start
-memorygrad learn
-memorygrad watch
-memorygrad review
-memorygrad sync
+gradient-descent-memory init
+gradient-descent-memory start
+gradient-descent-memory learn
+gradient-descent-memory watch
+gradient-descent-memory review
+gradient-descent-memory sync
 ```
 
 A recorded episode contains:
@@ -54,7 +54,7 @@ A recorded episode contains:
 task -> agent actions -> errors -> fix evidence -> tests pass -> commit or diff
 ```
 
-The easiest path is global-first: `memorygrad start` writes one global default config and global memory store, and `memorygrad learn` auto-initializes each repository when it ingests an episode. Global memory captures transferable agent behavior; repo memory captures project-specific behavior.
+The easiest path is global-first: `gradient-descent-memory start` writes one global default config and global memory store, and `gradient-descent-memory learn` auto-initializes each repository when it ingests an episode. Global memory captures transferable agent behavior; repo memory captures project-specific behavior.
 
 The MVP records:
 
@@ -81,7 +81,7 @@ When adding or changing an API route, register the route/router in app/main.py a
 
 Repo memory should be sparse. Bad memory is worse than no memory because future agents will follow it.
 
-MemoryGrad therefore uses a high default threshold:
+Gradient Descent Memory therefore uses a high default threshold:
 
 - repo proposals must clear 90% confidence by default
 - global proposals must clear 97% confidence by default
@@ -95,7 +95,7 @@ The goal is not to remember every episode. The goal is to remember only lessons 
 
 ## Memory Targets
 
-MemoryGrad treats `AGENTS.md` as the portable baseline for coding agents and supports tool-specific targets for agent runners that read their own project memory files:
+Gradient Descent Memory treats `AGENTS.md` as the portable baseline for coding agents and supports tool-specific targets for agent runners that read their own project memory files:
 
 - `AGENTS.md` for Codex and general agent instructions
 - `CLAUDE.md` for Claude Code
@@ -106,7 +106,7 @@ The default target set is `core`: `AGENTS.md` plus `CLAUDE.md`. Users can switch
 
 ## SkillOpt-Inspired Controls
 
-MemoryGrad implements a small subset of the SkillOpt control loop for everyday coding work:
+Gradient Descent Memory implements a small subset of the SkillOpt control loop for everyday coding work:
 
 - rollout evidence: terminal logs, git status, diffs, test output, and commits
 - textual gradient: a short failure explanation tied to reusable behavior
@@ -118,29 +118,29 @@ MemoryGrad implements a small subset of the SkillOpt control loop for everyday c
 
 ## Optimizer Implementation
 
-SkillOpt uses a separate optimizer model to edit the skill document. MemoryGrad makes the product tradeoff the user wanted for coding agents: the installed coding agent can optimize its own external memory artifacts.
+SkillOpt uses a separate optimizer model to edit the skill document. Gradient Descent Memory makes the product tradeoff the user wanted for coding agents: the installed coding agent can optimize its own external memory artifacts.
 
 The default optimizer is `auto`:
 
 - use Codex when `codex` is available
 - otherwise use Claude Code when `claude` is available
-- otherwise use `MEMORYGRAD_OPTIMIZER_COMMAND`
+- otherwise use `GRADIENT_DESCENT_MEMORY_OPTIMIZER_COMMAND`
 
-MemoryGrad still controls persistence. The optimizer can propose edits, but MemoryGrad applies confidence gates, stores rejected edits, requires review unless `--accept-all` is explicit, and syncs only the accepted active memory into prompt files.
+Gradient Descent Memory still controls persistence. The optimizer can propose edits, but Gradient Descent Memory applies confidence gates, stores rejected edits, requires review unless `--accept-all` is explicit, and syncs only the accepted active memory into prompt files.
 
 ## Demo
 
 1. Codex tries to add `/healthz`.
 2. Tests fail because the route is not registered.
 3. The fix adds registration in `app/main.py`.
-4. MemoryGrad sees the failed test, the fix diff, and the later passing test.
+4. Gradient Descent Memory sees the failed test, the fix diff, and the later passing test.
 5. It proposes one high-confidence lesson.
 6. The user accepts it.
 7. Future Codex or Claude Code sessions read the lesson from repo memory.
 
 ## Positioning
 
-MemoryGrad is not a benchmark optimizer. It is not a replacement for SkillOpt. It is a practical bridge between coding-agent traces and the global plus project memory files that Codex and Claude Code already use.
+Gradient Descent Memory is not a benchmark optimizer. It is not a replacement for SkillOpt. It is a practical bridge between coding-agent traces and the global plus project memory files that Codex and Claude Code already use.
 
 The product bet is simple:
 

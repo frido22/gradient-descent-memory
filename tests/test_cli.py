@@ -5,8 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from memorygrad.cli import main
-from memorygrad.store import MemoryStore, global_memory_store
+from gradient_descent_memory.cli import main
+from gradient_descent_memory.store import MemoryStore, global_memory_store
 
 
 def git(repo: Path, *args: str) -> None:
@@ -61,20 +61,20 @@ def set_optimizer(monkeypatch, tmp_path: Path, response: dict[str, object], *, r
         "import os\n"
         "import sys\n"
         "prompt = sys.stdin.read()\n"
-        "prompt_path = os.environ.get('MEMORYGRAD_TEST_PROMPT_PATH')\n"
+        "prompt_path = os.environ.get('GRADIENT_DESCENT_MEMORY_TEST_PROMPT_PATH')\n"
         "if prompt_path:\n"
         "    open(prompt_path, 'w', encoding='utf-8').write(prompt)\n"
-        "required = os.environ.get('MEMORYGRAD_TEST_REQUIRE', '')\n"
+        "required = os.environ.get('GRADIENT_DESCENT_MEMORY_TEST_REQUIRE', '')\n"
         "if required and required not in prompt:\n"
         "    print(json.dumps({'edits': []}))\n"
         "else:\n"
-        "    print(os.environ['MEMORYGRAD_TEST_RESPONSE'])\n",
+        "    print(os.environ['GRADIENT_DESCENT_MEMORY_TEST_RESPONSE'])\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("MEMORYGRAD_OPTIMIZER_COMMAND", f"{sys.executable} {script}")
-    monkeypatch.setenv("MEMORYGRAD_TEST_RESPONSE", json.dumps(response))
+    monkeypatch.setenv("GRADIENT_DESCENT_MEMORY_OPTIMIZER_COMMAND", f"{sys.executable} {script}")
+    monkeypatch.setenv("GRADIENT_DESCENT_MEMORY_TEST_RESPONSE", json.dumps(response))
     if require:
-        monkeypatch.setenv("MEMORYGRAD_TEST_REQUIRE", require)
+        monkeypatch.setenv("GRADIENT_DESCENT_MEMORY_TEST_REQUIRE", require)
     return script
 
 
@@ -99,7 +99,7 @@ def parser_response(*, confidence: float = 0.68) -> dict[str, object]:
             {
                 "scope": "repo",
                 "operation": "add",
-                "memory": "When making changes touching memorygrad/parser.py, run pytest tests/core -q before committing.",
+                "memory": "When making changes touching gradient-descent-memory/parser.py, run pytest tests/core -q before committing.",
                 "text_gradient": "The agent missed the repo-specific parser test target.",
                 "confidence": confidence,
                 "evidence": ["tests/core/test_parser.py failed", "parser.py changed", "tests passed"],
@@ -120,7 +120,7 @@ def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path, monkeypatch) -
 
     agents = (target / "AGENTS.md").read_text(encoding="utf-8")
     claude = (target / "CLAUDE.md").read_text(encoding="utf-8")
-    memory = (target / ".memorygrad" / "memory.md").read_text(encoding="utf-8")
+    memory = (target / ".gradient-descent-memory" / "memory.md").read_text(encoding="utf-8")
 
     assert "When adding or changing an API route" in agents
     assert "When adding or changing an API route" in claude
@@ -129,7 +129,7 @@ def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path, monkeypatch) -
 
 def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     set_optimizer(monkeypatch, tmp_path, route_response())
-    monkeypatch.setenv("MEMORYGRAD_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GRADIENT_DESCENT_MEMORY_HOME", str(tmp_path / "home"))
     assert main(["start", "--targets", "agents"]) == 0
 
     target = make_route_repo(tmp_path)
@@ -138,8 +138,8 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
 
     assert main(["learn", "Add /healthz", "--repo", str(target), "--log", str(log), "--accept-all"]) == 0
 
-    assert (target / ".memorygrad" / "config.json").exists()
-    gitignore = (target / ".memorygrad" / ".gitignore").read_text(encoding="utf-8")
+    assert (target / ".gradient-descent-memory" / "config.json").exists()
+    gitignore = (target / ".gradient-descent-memory" / ".gitignore").read_text(encoding="utf-8")
     assert "episodes/" in gitignore
     assert "!memory.md" in gitignore
     assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
@@ -148,7 +148,7 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
 
 def test_learn_uses_latest_commit_patch(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     prompt_path = tmp_path / "prompt.txt"
-    monkeypatch.setenv("MEMORYGRAD_TEST_PROMPT_PATH", str(prompt_path))
+    monkeypatch.setenv("GRADIENT_DESCENT_MEMORY_TEST_PROMPT_PATH", str(prompt_path))
     set_optimizer(monkeypatch, tmp_path, route_response(), require="include_router")
     target = make_route_repo(tmp_path)
     log = write_route_log(target)
@@ -170,7 +170,7 @@ def test_init_preserves_empty_targets_and_updates_config(tmp_path: Path) -> None
     git(target, "init")
 
     assert main(["init", "--repo", str(target), "--targets", "none"]) == 0
-    config_path = target / ".memorygrad" / "config.json"
+    config_path = target / ".gradient-descent-memory" / "config.json"
     assert json.loads(config_path.read_text(encoding="utf-8"))["targets"] == []
 
     assert main(["init", "--repo", str(target), "--targets", "all"]) == 0
@@ -217,7 +217,7 @@ def test_accept_all_skips_low_confidence_without_force(tmp_path: Path, monkeypat
     target.mkdir()
     git(target, "init")
 
-    package = target / "memorygrad"
+    package = target / "gradient-descent-memory"
     package.mkdir()
     (package / "parser.py").write_text("def parse(raw):\n    return raw\n", encoding="utf-8")
     git(target, "add", ".")
@@ -236,7 +236,7 @@ def test_accept_all_skips_low_confidence_without_force(tmp_path: Path, monkeypat
     assert not (target / "AGENTS.md").exists()
 
     assert main(["review", "--repo", str(target), "--accept-all", "--force"]) == 0
-    assert "When making changes touching memorygrad/parser.py" in (target / "AGENTS.md").read_text(encoding="utf-8")
+    assert "When making changes touching gradient-descent-memory/parser.py" in (target / "AGENTS.md").read_text(encoding="utf-8")
 
 
 def test_watch_rejects_low_confidence_by_default(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -245,7 +245,7 @@ def test_watch_rejects_low_confidence_by_default(tmp_path: Path, monkeypatch) ->
     target.mkdir()
     git(target, "init")
 
-    package = target / "memorygrad"
+    package = target / "gradient-descent-memory"
     package.mkdir()
     (package / "parser.py").write_text("def parse(raw):\n    return raw\n", encoding="utf-8")
     git(target, "add", ".")
@@ -265,7 +265,7 @@ def test_watch_rejects_low_confidence_by_default(tmp_path: Path, monkeypatch) ->
     assert store.list_proposals(status="pending") == []
     rejected = store.list_proposals(status="rejected_low_confidence")
     assert len(rejected) == 1
-    assert "below 90% repo confidence gate" in (target / ".memorygrad" / "rejected.md").read_text(encoding="utf-8")
+    assert "below 90% repo confidence gate" in (target / ".gradient-descent-memory" / "rejected.md").read_text(encoding="utf-8")
     assert not (target / "AGENTS.md").exists()
 
 
@@ -277,7 +277,7 @@ def test_status_on_empty_repo(tmp_path: Path, capsys) -> None:  # type: ignore[n
     captured = capsys.readouterr()
     assert "Episodes: 0" in captured.out
     assert "Proposals: 0" in captured.out
-    assert not (target / ".memorygrad").exists()
+    assert not (target / ".gradient-descent-memory").exists()
 
 
 def test_sync_respects_targets_and_active_cap(tmp_path: Path) -> None:

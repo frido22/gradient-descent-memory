@@ -49,12 +49,12 @@ class CliError(Exception):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="memorygrad",
-        description="Passive gradient memory for coding agents.",
+        prog="gradient-descent-memory",
+        description="Self-improving memory for coding agents.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init", help="Initialize .memorygrad in a repo.")
+    init = sub.add_parser("init", help="Initialize .gradient-descent-memory in a repo.")
     init.add_argument("--repo", default=".", help="Target repo path.")
     init.add_argument(
         "--targets",
@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-confidence",
         type=float,
         default=None,
-        help="Only save proposals at or above this confidence. Default comes from .memorygrad/config.json.",
+        help="Only save proposals at or above this confidence. Default comes from .gradient-descent-memory/config.json.",
     )
     watch.add_argument("--global-min-confidence", type=float, default=None, help="Override the global-memory gate.")
     watch.add_argument("--optimizer", default=None, help="Override optimizer agent: auto, codex, claude.")
@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--interval", type=float, default=10.0, help="Polling interval for --follow.")
     watch.set_defaults(func=cmd_watch)
 
-    review = sub.add_parser("review", help="Review pending MemoryGrad proposals.")
+    review = sub.add_parser("review", help="Review pending Gradient Descent Memory proposals.")
     review.add_argument("--repo", default=".", help="Target repo path.")
     review.add_argument("--accept-all", action="store_true", help="Accept every pending proposal.")
     review.add_argument("--reject-all", action="store_true", help="Reject every pending proposal.")
@@ -195,7 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.set_defaults(func=cmd_sync)
 
-    status = sub.add_parser("status", help="Show MemoryGrad episode and proposal counts.")
+    status = sub.add_parser("status", help="Show Gradient Descent Memory episode and proposal counts.")
     status.add_argument("--repo", default=".", help="Target repo path.")
     status.set_defaults(func=cmd_status)
 
@@ -241,7 +241,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         global_store = global_memory_store()
         global_store.init(config=config)
         path = save_global_config(config)
-        print(f"Started MemoryGrad globally at {path.parent}")
+        print(f"Started Gradient Descent Memory globally at {path.parent}")
         print(f"Default targets: {', '.join(config['targets']) or '(none)'}")
         print(
             f"Memory gates: repo {config['min_confidence']:.0%}, global "
@@ -250,8 +250,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(f"Optimizer: {config['optimizer']}")
         print()
         print("In any git repo after an agent run:")
-        print('  memorygrad learn "what the agent tried" --log session.log')
-        print("  memorygrad review")
+        print('  gradient-descent-memory learn "what the agent tried" --log session.log')
+        print("  gradient-descent-memory review")
         return 0
 
     repo = discover_repo(Path(args.repo))
@@ -268,8 +268,8 @@ def cmd_start(args: argparse.Namespace) -> int:
     if result == 0:
         print()
         print("Next:")
-        print('  memorygrad learn "what the agent tried" --log session.log')
-        print("  memorygrad review")
+        print('  gradient-descent-memory learn "what the agent tried" --log session.log')
+        print("  gradient-descent-memory review")
     return result
 
 
@@ -523,7 +523,7 @@ def _initialize_repo(
     config["optimizer"] = optimizer
     config["optimizer_command"] = optimizer_command
     store.init(config=config)
-    print(f"Initialized MemoryGrad in {store.root}")
+    print(f"Initialized Gradient Descent Memory in {store.root}")
     print(f"Targets: {', '.join(config['targets']) or '(none)'}")
     print(
         f"Memory gates: repo {config['min_confidence']:.0%}, global "
@@ -658,10 +658,7 @@ def _watch_once(
 
     print(f"Recorded episode {episode['id']}")
     if rejected:
-        print(
-            f"Rejected {len(rejected)} low-signal draft(s) below "
-            f"{min_confidence:.0%} confidence."
-        )
+        print(f"Rejected {len(rejected)} low-signal draft(s).")
     if not saved:
         print("No new high-signal proposals.")
         return 0
@@ -675,7 +672,7 @@ def _watch_once(
         print(f"Gradient: {proposal['text_gradient']}")
         print(f"Memory: {proposal_memory(proposal)}")
     print()
-    print("Run `memorygrad review` to accept or reject.")
+    print("Run `gradient-descent-memory review` to accept or reject.")
     return 0
 
 

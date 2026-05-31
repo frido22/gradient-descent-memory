@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 
 
-BLOCK_TITLE = "## MemoryGrad Lessons"
-BLOCK_START = "<!-- memorygrad:start -->"
-BLOCK_END = "<!-- memorygrad:end -->"
+BLOCK_TITLE = "## Gradient Descent Memory"
+BLOCK_START = "<!-- gradient-descent-memory:start -->"
+BLOCK_END = "<!-- gradient-descent-memory:end -->"
 
 
 def append_memory_to_ledger(
@@ -20,7 +20,7 @@ def append_memory_to_ledger(
     target_memory: str,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    ledger = path.read_text(encoding="utf-8") if path.exists() else "# MemoryGrad Memory\n"
+    ledger = path.read_text(encoding="utf-8") if path.exists() else "# Gradient Descent Memory\n"
     entry = (
         f"\n- {memory}\n"
         f"  - Operation: {operation}\n"
@@ -44,7 +44,7 @@ def append_rejection_to_buffer(
 ) -> None:
     path = base / "rejected.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = path.read_text(encoding="utf-8") if path.exists() else "# MemoryGrad Rejected Edits\n"
+    content = path.read_text(encoding="utf-8") if path.exists() else "# Rejected Memory Edits\n"
     if f"  - Proposal: {proposal_id}\n" in content:
         return
     entry = (

@@ -4,15 +4,9 @@ Self-improving memory for coding agents.
 
 Gradient Descent Memory watches normal Codex, Claude Code, and other coding-agent work, then turns failures and fixes into reviewed memory edits. It is inspired by [SkillOpt](https://arxiv.org/abs/2605.23904): treat natural-language memory as external trainable state, improve it from rollout evidence, and keep noisy edits out of context.
 
-The CLI is still short:
-
-```bash
-memorygrad
-```
-
 ## What It Does
 
-`memorygrad learn` records one coding episode:
+`gradient-descent-memory learn` records one coding episode:
 
 ```text
 task -> terminal output -> git diffs -> latest commit patch -> tests/fix signal
@@ -32,12 +26,12 @@ Each proposal includes:
 - confidence
 - evidence
 
-MemoryGrad applies the gates, stores rejected edits, and only syncs accepted memory into agent files.
+Gradient Descent Memory applies the gates, stores rejected edits, and only syncs accepted memory into agent files.
 
 ## Memory Layers
 
-- Global memory: `~/.memorygrad/memory.md`
-- Repo memory: `<repo>/.memorygrad/memory.md`
+- Global memory: `~/.gradient-descent-memory/memory.md`
+- Repo memory: `<repo>/.gradient-descent-memory/memory.md`
 - Active agent files: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`
 
 Defaults are intentionally conservative:
@@ -77,36 +71,36 @@ pip install -e ".[dev]"
 One-time setup:
 
 ```bash
-memorygrad start
+gradient-descent-memory start
 ```
 
 After an agent session:
 
 ```bash
-memorygrad learn "Add /healthz" --log session.log
-memorygrad review
+gradient-descent-memory learn "Add /healthz" --log session.log
+gradient-descent-memory review
 ```
 
 Non-interactive demo:
 
 ```bash
-memorygrad learn "Add /healthz" --log session.log --accept-all
+gradient-descent-memory learn "Add /healthz" --log session.log --accept-all
 ```
 
 Useful options:
 
 ```bash
-memorygrad start --optimizer codex
-memorygrad start --optimizer claude
-memorygrad start --targets core --min-confidence 0.90 --global-min-confidence 0.97
-memorygrad sync --targets all
-memorygrad status
+gradient-descent-memory start --optimizer codex
+gradient-descent-memory start --optimizer claude
+gradient-descent-memory start --targets core --min-confidence 0.90 --global-min-confidence 0.97
+gradient-descent-memory sync --targets all
+gradient-descent-memory status
 ```
 
 For custom optimizers:
 
 ```bash
-MEMORYGRAD_OPTIMIZER_COMMAND="./my-optimizer" memorygrad learn "Fix parser" --log session.log
+GRADIENT_DESCENT_MEMORY_OPTIMIZER_COMMAND="./my-optimizer" gradient-descent-memory learn "Fix parser" --log session.log
 ```
 
 The custom command receives the optimizer prompt on stdin and must return JSON.

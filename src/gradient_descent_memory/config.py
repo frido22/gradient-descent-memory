@@ -77,10 +77,10 @@ def save_global_config(config: dict[str, Any]) -> Path:
 
 
 def global_config_path() -> Path:
-    root = os.environ.get("MEMORYGRAD_HOME")
+    root = os.environ.get("GRADIENT_DESCENT_MEMORY_HOME")
     if root:
         return Path(root).expanduser() / "config.json"
-    return Path.home() / ".memorygrad" / "config.json"
+    return Path.home() / ".gradient-descent-memory" / "config.json"
 
 
 def global_home() -> Path:
@@ -135,7 +135,7 @@ def _normalize_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _config_path(repo: Path) -> Path:
-    return repo / ".memorygrad" / "config.json"
+    return repo / ".gradient-descent-memory" / "config.json"
 
 
 def _clamp_float(value: object, fallback: float) -> float:

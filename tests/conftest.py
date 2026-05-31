@@ -13,5 +13,5 @@ if str(SRC) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def isolated_memorygrad_home(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("MEMORYGRAD_HOME", str(tmp_path / "memorygrad-home"))
+def isolated_gradient_descent_memory_home(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GRADIENT_DESCENT_MEMORY_HOME", str(tmp_path / "gradient-descent-memory-home"))

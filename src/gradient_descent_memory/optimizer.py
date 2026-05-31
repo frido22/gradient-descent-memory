@@ -85,7 +85,7 @@ def build_optimizer_prompt(
     }
     return textwrap.dedent(
         f"""
-        You are the MemoryGrad optimizer running inside a coding agent. Do not edit files or run commands.
+        You are the Gradient Descent Memory optimizer running inside a coding agent. Do not edit files or run commands.
 
         Optimize external memory text for future coding-agent runs, following the SkillOpt-style loop:
         use rollout evidence, propose bounded add/replace/delete edits, keep rejected edits in mind,
@@ -125,11 +125,11 @@ def build_optimizer_prompt(
 
 
 def run_optimizer(*, prompt: str, repo: Path, optimizer: str, optimizer_command: str) -> str:
-    command = optimizer_command or os.environ.get("MEMORYGRAD_OPTIMIZER_COMMAND", "")
+    command = optimizer_command or os.environ.get("GRADIENT_DESCENT_MEMORY_OPTIMIZER_COMMAND", "")
     if command:
         return _run_custom_command(command, prompt=prompt, repo=repo)
 
-    selected = (os.environ.get("MEMORYGRAD_OPTIMIZER") or optimizer or "auto").strip().lower()
+    selected = (os.environ.get("GRADIENT_DESCENT_MEMORY_OPTIMIZER") or optimizer or "auto").strip().lower()
     if selected == "auto":
         if shutil.which("codex"):
             selected = "codex"
@@ -137,14 +137,14 @@ def run_optimizer(*, prompt: str, repo: Path, optimizer: str, optimizer_command:
             selected = "claude"
         else:
             raise OptimizerError(
-                "No optimizer agent found. Install Codex/Claude Code or set MEMORYGRAD_OPTIMIZER_COMMAND."
+                "No optimizer agent found. Install Codex/Claude Code or set GRADIENT_DESCENT_MEMORY_OPTIMIZER_COMMAND."
             )
 
     if selected == "codex":
         return _run_codex(prompt=prompt, repo=repo)
     if selected == "claude":
         return _run_claude(prompt=prompt, repo=repo)
-    raise OptimizerError(f"Unknown optimizer {selected!r}; use auto, codex, claude, or MEMORYGRAD_OPTIMIZER_COMMAND.")
+    raise OptimizerError(f"Unknown optimizer {selected!r}; use auto, codex, claude, or GRADIENT_DESCENT_MEMORY_OPTIMIZER_COMMAND.")
 
 
 def parse_optimizer_response(raw: str, *, max_edits: int) -> list[ProposalDraft]:
@@ -231,7 +231,7 @@ def _run_codex(*, prompt: str, repo: Path) -> str:
     if not codex:
         raise OptimizerError("Codex CLI is not installed or not on PATH.")
 
-    with tempfile.TemporaryDirectory(prefix="memorygrad-codex-") as temp:
+    with tempfile.TemporaryDirectory(prefix="gradient-descent-memory-codex-") as temp:
         schema_path = Path(temp) / "schema.json"
         output_path = Path(temp) / "response.json"
         schema_path.write_text(json.dumps(OPTIMIZER_SCHEMA), encoding="utf-8")

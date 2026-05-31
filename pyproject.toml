@@ -20,8 +20,7 @@ dev = [
 ]
 
 [project.scripts]
-memorygrad = "memorygrad.cli:main"
-memgrad = "memorygrad.cli:main"
+gradient-descent-memory = "gradient_descent_memory.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

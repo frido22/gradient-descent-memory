@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from memorygrad.optimizer import build_optimizer_prompt, parse_optimizer_response
+from gradient_descent_memory.optimizer import build_optimizer_prompt, parse_optimizer_response
 
 
 def test_parse_optimizer_response_validates_bounded_edits() -> None:
