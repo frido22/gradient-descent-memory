@@ -91,6 +91,9 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
     assert main(["learn", "Add /healthz", "--repo", str(target), "--log", str(log), "--accept-all"]) == 0
 
     assert (target / ".memorygrad" / "config.json").exists()
+    gitignore = (target / ".memorygrad" / ".gitignore").read_text(encoding="utf-8")
+    assert "episodes/" in gitignore
+    assert "!skills.md" in gitignore
     assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
     assert not (target / "CLAUDE.md").exists()
 

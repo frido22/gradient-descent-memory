@@ -59,7 +59,8 @@ When adding or changing an API route, register the route/router in app/main.py a
 ## Install For Local Development
 
 ```bash
-cd /Users/frido_mac/Projects/memorygrad
+git clone https://github.com/frido22/memorygrad.git
+cd memorygrad
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip

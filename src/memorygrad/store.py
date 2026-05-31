@@ -46,6 +46,7 @@ class MemoryStore:
     def init(self, config: dict[str, Any] | None = None) -> None:
         self.episodes_dir.mkdir(parents=True, exist_ok=True)
         self.proposals_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_gitignore()
         if not self.config_path.exists():
             save_config(self.root, config or default_config())
         if not self.skills_path.exists():
@@ -98,6 +99,26 @@ class MemoryStore:
                 if stripped.startswith("- "):
                     texts.append(stripped[2:].strip())
         return list({normalize_skill(text): text for text in texts}.values())
+
+    def _ensure_gitignore(self) -> None:
+        path = self.base / ".gitignore"
+        if path.exists():
+            return
+        path.write_text(
+            "\n".join(
+                [
+                    "episodes/",
+                    "proposals/",
+                    "rejected.md",
+                    "",
+                    "!config.json",
+                    "!skills.md",
+                    "!.gitignore",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
 
 def _read_json_dir(path: Path) -> list[dict[str, Any]]:
