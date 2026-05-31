@@ -41,6 +41,8 @@ MemoryGrad runs as:
 
 ```bash
 memorygrad init
+memorygrad start
+memorygrad learn
 memorygrad watch
 memorygrad review
 memorygrad sync
@@ -51,6 +53,8 @@ A recorded episode contains:
 ```text
 task -> agent actions -> errors -> fix evidence -> tests pass -> commit or diff
 ```
+
+The easiest path is global-first: `memorygrad start` writes one global default config, and `memorygrad learn` auto-initializes each repository when it ingests an episode. This keeps setup independent from any single repo while preserving repo-local accepted memory.
 
 The MVP records:
 

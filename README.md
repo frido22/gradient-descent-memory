@@ -68,22 +68,28 @@ pip install -e ".[dev]"
 
 ## Quick Demo
 
-Inside any target repo:
+One-time setup from anywhere:
 
 ```bash
-memorygrad init
-memorygrad watch --task "Add /healthz" --terminal-log /path/to/session.log --once
+memorygrad start
+```
+
+Then, after a coding-agent session, run this inside the repo:
+
+```bash
+memorygrad learn "Add /healthz" --log session.log
 memorygrad review
 ```
+
+That is the normal path. `learn` auto-initializes `.memorygrad/` in the repo the first time it ingests a session.
 
 For a non-interactive demo:
 
 ```bash
-memorygrad watch --repo /path/to/repo --task "Add /healthz" --terminal-log /path/to/session.log --once
-memorygrad review --repo /path/to/repo --accept-all
+memorygrad learn "Add /healthz" --repo /path/to/repo --log /path/to/session.log --accept-all
 ```
 
-Accepted skills are written to:
+Accepted skills are written to the configured targets, usually:
 
 - `/path/to/repo/AGENTS.md`
 - `/path/to/repo/CLAUDE.md`
@@ -93,9 +99,31 @@ The full accepted history stays in `.memorygrad/skills.md`; the active memory fi
 
 ## Commands
 
+### `memorygrad start`
+
+Creates global defaults once. This does not need to run inside a repo.
+
+```bash
+memorygrad start
+memorygrad start --targets agents
+memorygrad start --targets core --min-confidence 0.90 --max-active-skills 8
+```
+
+Global start defaults to `auto`, which uses existing known memory files when present and otherwise starts with `AGENTS.md` only.
+
+### `memorygrad learn`
+
+The easy ingest command. It auto-initializes the current repo from the global defaults.
+
+```bash
+memorygrad learn "Add /version" --log session.log
+memorygrad learn "Add /version" --log session.log --review
+memorygrad learn "Add /version" --log session.log --accept-all
+```
+
 ### `memorygrad init`
 
-Creates the local `.memorygrad` directory, config, and skills ledger.
+Advanced per-repo setup. Most users can use `memorygrad start` globally and skip this.
 
 ```bash
 memorygrad init --repo /path/to/repo

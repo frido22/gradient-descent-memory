@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -42,10 +43,37 @@ def load_config(repo: Path) -> dict[str, Any]:
     return _normalize_config(config)
 
 
+def load_global_config() -> dict[str, Any]:
+    path = global_config_path()
+    config = default_config(targets=["AGENTS.md"])
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            loaded = {}
+        if isinstance(loaded, dict):
+            config.update({key: value for key, value in loaded.items() if value is not None})
+    return _normalize_config(config)
+
+
 def save_config(repo: Path, config: dict[str, Any]) -> None:
     path = _config_path(repo)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_normalize_config(config), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def save_global_config(config: dict[str, Any]) -> Path:
+    path = global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_normalize_config(config), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def global_config_path() -> Path:
+    root = os.environ.get("MEMORYGRAD_HOME")
+    if root:
+        return Path(root).expanduser() / "config.json"
+    return Path.home() / ".memorygrad" / "config.json"
 
 
 def resolve_targets(repo: Path, value: str | list[str] | None) -> list[str]:

@@ -58,6 +58,43 @@ def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path) -> None:
     assert "registered in app/main.py" in skills
 
 
+def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MEMORYGRAD_HOME", str(tmp_path / "home"))
+    assert main(["start", "--targets", "agents"]) == 0
+
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+
+    (target / "app").mkdir()
+    (target / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (target / "tests").mkdir()
+    (target / "tests" / "api").mkdir()
+    (target / "tests" / "api" / "test_health.py").write_text("def test_healthz():\n    pass\n", encoding="utf-8")
+    git(target, "add", ".")
+    git(target, "commit", "-m", "Initial app")
+
+    log = target / "session.log"
+    log.write_text(
+        "FAILED tests/api/test_health.py::test_healthz - assert 404 == 200\n"
+        "=========================== 1 passed in 0.19s ===========================\n",
+        encoding="utf-8",
+    )
+    (target / "app" / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "from app.routes.health import router as health_router\n"
+        "app = FastAPI()\n"
+        "app.include_router(health_router)\n",
+        encoding="utf-8",
+    )
+
+    assert main(["learn", "Add /healthz", "--repo", str(target), "--log", str(log), "--accept-all"]) == 0
+
+    assert (target / ".memorygrad" / "config.json").exists()
+    assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
+    assert not (target / "CLAUDE.md").exists()
+
+
 def test_accept_all_skips_low_confidence_without_force(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()

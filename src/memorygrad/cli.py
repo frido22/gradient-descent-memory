@@ -7,10 +7,20 @@ import time
 from pathlib import Path
 
 from .analyzer import analyze_episode
-from .config import DEFAULT_MAX_ACTIVE_SKILLS, DEFAULT_MIN_CONFIDENCE, default_config, resolve_targets
+from .config import (
+    DEFAULT_MAX_ACTIVE_SKILLS,
+    DEFAULT_MIN_CONFIDENCE,
+    default_config,
+    load_global_config,
+    resolve_targets,
+    save_global_config,
+)
 from .git_tools import collect_git_snapshot, discover_repo
 from .memory_files import append_rejection_to_buffer, append_skill_to_memory_files, sync_memory_targets
 from .store import MemoryStore, make_episode, utc_now
+
+
+AGENT_CHOICES = ["unknown", "codex", "claude", "gemini", "copilot", "cursor", "other"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,13 +51,35 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--max-active-skills", type=int, default=DEFAULT_MAX_ACTIVE_SKILLS, help="Active memory cap.")
     init.set_defaults(func=cmd_init)
 
+    start = sub.add_parser("start", help="One-time easy setup.")
+    start.add_argument("--repo", default=None, help="Optional repo path for repo-local setup.")
+    start.add_argument(
+        "--targets",
+        default="auto",
+        help="Memory targets: auto, core, agents, all, none, or comma-separated aliases/paths. Default: auto.",
+    )
+    start.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE, help="Default proposal gate.")
+    start.add_argument("--max-active-skills", type=int, default=DEFAULT_MAX_ACTIVE_SKILLS, help="Active memory cap.")
+    start.set_defaults(func=cmd_start)
+
+    learn = sub.add_parser("learn", help="Easy one-shot ingest for a coding session.")
+    learn.add_argument("task", nargs="?", default="", help="What the agent was trying to do.")
+    learn.add_argument("--repo", default=".", help="Target repo path.")
+    learn.add_argument("--log", "--terminal-log", dest="terminal_log", default="", help="Terminal/session log path.")
+    learn.add_argument("--agent", default="unknown", choices=AGENT_CHOICES, help="Agent label.")
+    learn.add_argument("--max-terminal-bytes", type=int, default=80_000, help="Maximum log bytes to ingest.")
+    learn.add_argument("--min-confidence", type=float, default=None, help="Override the configured proposal gate.")
+    learn.add_argument("--review", action="store_true", help="Open interactive review after ingesting.")
+    learn.add_argument("--accept-all", action="store_true", help="Accept high-confidence proposals after ingesting.")
+    learn.set_defaults(func=cmd_learn)
+
     watch = sub.add_parser("watch", help="Record an episode and propose repo-memory skills.")
     watch.add_argument("--repo", default=".", help="Target repo path.")
     watch.add_argument("--task", default="", help="Task or intent for this coding episode.")
     watch.add_argument(
         "--agent",
         default="unknown",
-        choices=["unknown", "codex", "claude", "gemini", "copilot", "cursor", "other"],
+        choices=AGENT_CHOICES,
         help="Agent label.",
     )
     watch.add_argument("--terminal-log", default="", help="Path to terminal/session log. Use '-' for stdin.")
@@ -95,22 +127,76 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_init(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
-    store = MemoryStore(repo)
-    if not _valid_confidence(args.min_confidence):
+    return _initialize_repo(
+        repo,
+        targets=args.targets,
+        min_confidence=args.min_confidence,
+        max_active_skills=args.max_active_skills,
+    )
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    if args.repo is None:
+        if not _valid_confidence(args.min_confidence):
+            print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+            return 2
+        if args.max_active_skills < 1:
+            print("--max-active-skills must be at least 1.", file=sys.stderr)
+            return 2
+
+        config = default_config(targets=resolve_targets(Path.cwd(), args.targets))
+        config["min_confidence"] = args.min_confidence
+        config["max_active_skills"] = args.max_active_skills
+        path = save_global_config(config)
+        print(f"Started MemoryGrad globally at {path.parent}")
+        print(f"Default targets: {', '.join(config['targets']) or '(none)'}")
+        print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_skills']}")
+        print()
+        print("In any git repo after an agent run:")
+        print('  memorygrad learn "what the agent tried" --log session.log')
+        print("  memorygrad review")
+        return 0
+
+    repo = discover_repo(Path(args.repo))
+    result = _initialize_repo(
+        repo,
+        targets=args.targets,
+        min_confidence=args.min_confidence,
+        max_active_skills=args.max_active_skills,
+    )
+    if result == 0:
+        print()
+        print("Next:")
+        print('  memorygrad learn "what the agent tried" --log session.log')
+        print("  memorygrad review")
+    return result
+
+
+def cmd_learn(args: argparse.Namespace) -> int:
+    repo = discover_repo(Path(args.repo))
+    store = _ensure_repo_started(repo)
+    config = store.load_config()
+    min_confidence = _effective_confidence(args.min_confidence, config)
+    if not _valid_confidence(min_confidence):
         print("--min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
-    if args.max_active_skills < 1:
-        print("--max-active-skills must be at least 1.", file=sys.stderr)
-        return 2
 
-    config = default_config(targets=resolve_targets(repo, args.targets))
-    config["min_confidence"] = args.min_confidence
-    config["max_active_skills"] = args.max_active_skills
-    store.init(config=config)
-    print(f"Initialized MemoryGrad in {store.root}")
-    print(f"Targets: {', '.join(config['targets']) or '(none)'}")
-    print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_skills']}")
-    return 0
+    result = _watch_once(args, repo, store, min_confidence=min_confidence)
+    if result != 0 or not (args.review or args.accept_all):
+        return result
+
+    review_args = argparse.Namespace(
+        repo=str(repo),
+        accept_all=args.accept_all,
+        reject_all=False,
+        accept=[],
+        reject=[],
+        min_confidence=args.min_confidence,
+        targets=None,
+        max_active_skills=None,
+        force=False,
+    )
+    return cmd_review(review_args)
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -252,6 +338,42 @@ def cmd_sync(args: argparse.Namespace) -> int:
     for path in written:
         print(f"  {path.relative_to(repo)}")
     return 0
+
+
+def _initialize_repo(
+    repo: Path,
+    *,
+    targets: str,
+    min_confidence: float,
+    max_active_skills: int,
+) -> int:
+    store = MemoryStore(repo)
+    if not _valid_confidence(min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+    if max_active_skills < 1:
+        print("--max-active-skills must be at least 1.", file=sys.stderr)
+        return 2
+
+    config = default_config(targets=resolve_targets(repo, targets))
+    config["min_confidence"] = min_confidence
+    config["max_active_skills"] = max_active_skills
+    store.init(config=config)
+    print(f"Initialized MemoryGrad in {store.root}")
+    print(f"Targets: {', '.join(config['targets']) or '(none)'}")
+    print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_skills']}")
+    return 0
+
+
+def _ensure_repo_started(repo: Path) -> MemoryStore:
+    store = MemoryStore(repo)
+    if store.config_path.exists():
+        store.init()
+        return store
+
+    config = load_global_config()
+    store.init(config=config)
+    return store
 
 
 def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min_confidence: float) -> int:
