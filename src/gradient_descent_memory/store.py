@@ -113,9 +113,8 @@ class MemoryStore:
             if not path.exists():
                 continue
             for line in path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped.startswith("- "):
-                    texts.append(stripped[2:].strip())
+                if line.startswith("- "):
+                    texts.append(line[2:].strip())
         return list({normalize_memory(text): text for text in texts}.values())
 
     def load_rejected_texts(self) -> list[str]:
@@ -123,9 +122,8 @@ class MemoryStore:
             return []
         texts: list[str] = []
         for line in self.rejected_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("- "):
-                texts.append(stripped[2:].strip())
+            if line.startswith("- "):
+                texts.append(line[2:].strip())
         return texts
 
     def _ensure_gitignore(self) -> None:

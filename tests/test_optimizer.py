@@ -28,6 +28,25 @@ def test_parse_optimizer_response_validates_bounded_edits() -> None:
     assert drafts[0].target_memory == "Run pytest -q."
 
 
+def test_parse_optimizer_response_rejects_malformed_evidence() -> None:
+    response = """
+    {
+      "edits": [
+        {
+          "scope": "repo",
+          "operation": "add",
+          "memory": "Run pytest tests/api -q.",
+          "text_gradient": "The agent needed the API test command.",
+          "confidence": 0.93,
+          "evidence": "tests/api failed"
+        }
+      ]
+    }
+    """
+
+    assert parse_optimizer_response(response, max_edits=2) == []
+
+
 def test_optimizer_prompt_contains_global_and_repo_memory() -> None:
     prompt = build_optimizer_prompt(
         episode={"task": "Add /healthz", "agent": "codex", "terminal_output": "FAILED", "git": {"status": " M app/main.py"}},

@@ -179,7 +179,10 @@ def _draft_from_item(item: dict[str, object]) -> ProposalDraft | None:
     memory = _single_line(str(item.get("memory") or ""))
     target_memory = _single_line(str(item.get("target_memory") or ""))
     text_gradient = _single_line(str(item.get("text_gradient") or ""))
-    evidence = [_single_line(str(value)) for value in item.get("evidence", []) if str(value).strip()][:5]
+    raw_evidence = item.get("evidence", [])
+    if not isinstance(raw_evidence, list):
+        return None
+    evidence = [_single_line(str(value)) for value in raw_evidence if str(value).strip()][:5]
 
     if scope not in SCOPES or operation not in OPERATIONS:
         return None
@@ -211,14 +214,11 @@ def _draft_from_item(item: dict[str, object]) -> ProposalDraft | None:
 
 
 def _run_custom_command(command: str, *, prompt: str, repo: Path) -> str:
-    result = subprocess.run(
+    result = _run_process(
+        "optimizer command",
         shlex.split(command),
         input=prompt,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         cwd=repo,
-        check=False,
         timeout=240,
     )
     if result.returncode != 0:
@@ -235,7 +235,8 @@ def _run_codex(*, prompt: str, repo: Path) -> str:
         schema_path = Path(temp) / "schema.json"
         output_path = Path(temp) / "response.json"
         schema_path.write_text(json.dumps(OPTIMIZER_SCHEMA), encoding="utf-8")
-        result = subprocess.run(
+        result = _run_process(
+            "codex optimizer",
             [
                 codex,
                 "exec",
@@ -251,10 +252,7 @@ def _run_codex(*, prompt: str, repo: Path) -> str:
                 "-",
             ],
             input=prompt,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+            cwd=repo,
             timeout=300,
         )
         if result.returncode != 0:
@@ -268,7 +266,8 @@ def _run_claude(*, prompt: str, repo: Path) -> str:
     claude = shutil.which("claude")
     if not claude:
         raise OptimizerError("Claude Code CLI is not installed or not on PATH.")
-    result = subprocess.run(
+    result = _run_process(
+        "claude optimizer",
         [
             claude,
             "-p",
@@ -282,11 +281,7 @@ def _run_claude(*, prompt: str, repo: Path) -> str:
             "",
         ],
         input=prompt,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         cwd=repo,
-        check=False,
         timeout=300,
     )
     if result.returncode != 0:
@@ -305,13 +300,43 @@ def _loads_json(raw: str) -> dict[str, Any]:
         end = text.rfind("}")
         if start < 0 or end < start:
             raise OptimizerError("Optimizer did not return JSON.") from None
-        payload = json.loads(text[start : end + 1])
+        try:
+            payload = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            raise OptimizerError("Optimizer did not return valid JSON.") from None
 
     if isinstance(payload, dict) and isinstance(payload.get("result"), str):
         return _loads_json(str(payload["result"]))
     if not isinstance(payload, dict):
         raise OptimizerError("Optimizer JSON must be an object.")
     return payload
+
+
+def _run_process(
+    name: str,
+    args: list[str],
+    *,
+    input: str,
+    cwd: Path,
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            args,
+            input=input,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            check=False,
+            timeout=timeout,
+        )
+    except FileNotFoundError as error:
+        raise OptimizerError(f"{name} failed: command not found: {error.filename}") from error
+    except OSError as error:
+        raise OptimizerError(f"{name} failed: {error.strerror or error}") from error
+    except subprocess.TimeoutExpired as error:
+        raise OptimizerError(f"{name} timed out after {error.timeout:g}s") from error
 
 
 def _command_error(name: str, result: subprocess.CompletedProcess[str]) -> str:

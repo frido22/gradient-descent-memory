@@ -64,28 +64,35 @@ def sync_memory_targets(
     max_active_memory: int,
 ) -> list[Path]:
     active_memory = _active_memory_texts(accepted_proposals, max_active_memory)
-    if not active_memory:
-        return []
     written: list[Path] = []
     for target in target_paths:
         path = repo / target
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if not active_memory and not path.exists():
+            continue
         content = path.read_text(encoding="utf-8") if path.exists() else _default_content(target)
         updated = sync_memory_block(content, active_memory)
+        if updated == content:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(updated, encoding="utf-8")
         written.append(path)
     return written
 
 
 def sync_memory_block(content: str, memories: list[str]) -> str:
-    block = _format_memory_block(memories)
+    existing = _split_existing_block(content)
+    if not memories:
+        if existing is None:
+            return content
+        prefix, suffix = existing
+        return _join_without_block(prefix, suffix)
 
-    if BLOCK_START not in content or BLOCK_END not in content:
+    block = _format_memory_block(memories)
+    if existing is None:
         return content.rstrip() + block
 
-    before, rest = content.split(BLOCK_END, 1)
-    block_prefix = before.rsplit(BLOCK_START, 1)[0].rstrip()
-    return f"{block_prefix}{block}{rest.lstrip()}"
+    prefix, suffix = existing
+    return _join_with_block(prefix, block, suffix)
 
 
 def _active_memory_texts(proposals: list[dict[str, object]], max_active_memory: int) -> list[str]:
@@ -131,6 +138,38 @@ def _default_content(target: str) -> str:
     name = Path(target).name
     if name.endswith(".md"):
         return f"# {name}\n"
+    return ""
+
+
+def _split_existing_block(content: str) -> tuple[str, str] | None:
+    start = content.find(BLOCK_START)
+    if start < 0:
+        return None
+    end = content.find(BLOCK_END, start)
+    if end < 0:
+        return None
+
+    section_start = content.rfind(BLOCK_TITLE, 0, start)
+    if section_start < 0:
+        section_start = start
+    section_end = end + len(BLOCK_END)
+    return content[:section_start], content[section_end:]
+
+
+def _join_with_block(prefix: str, block: str, suffix: str) -> str:
+    updated = prefix.rstrip() + block if prefix.strip() else block.lstrip()
+    if suffix.strip():
+        updated = updated.rstrip() + "\n" + suffix.lstrip()
+    return updated.rstrip() + "\n"
+
+
+def _join_without_block(prefix: str, suffix: str) -> str:
+    if prefix.strip() and suffix.strip():
+        return prefix.rstrip() + "\n" + suffix.lstrip()
+    if prefix.strip():
+        return prefix.rstrip() + "\n"
+    if suffix.strip():
+        return suffix.lstrip()
     return ""
 
 

@@ -109,6 +109,29 @@ def parser_response(*, confidence: float = 0.68) -> dict[str, object]:
     }
 
 
+def two_route_responses() -> dict[str, object]:
+    return {
+        "edits": [
+            {
+                "scope": "repo",
+                "operation": "add",
+                "memory": "When adding API routes, register the router in app/main.py.",
+                "text_gradient": "The agent missed the route registration point.",
+                "confidence": 0.91,
+                "evidence": ["404 before registration", "include_router fixed it"],
+            },
+            {
+                "scope": "repo",
+                "operation": "add",
+                "memory": "For API route changes, run pytest tests/api -q.",
+                "text_gradient": "The agent needed the repo-specific API test command.",
+                "confidence": 0.92,
+                "evidence": ["tests/api failed", "pytest tests/api -q passed"],
+            },
+        ]
+    }
+
+
 def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     set_optimizer(monkeypatch, tmp_path, route_response())
     target = make_route_repo(tmp_path)
@@ -145,6 +168,20 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
     assert "!memory.md" in gitignore
     assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
     assert not (target / "CLAUDE.md").exists()
+
+
+def test_accept_all_does_not_duplicate_memory_block(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    set_optimizer(monkeypatch, tmp_path, two_route_responses())
+    target = make_route_repo(tmp_path)
+    log = write_route_log(target)
+    register_health_route(target)
+
+    assert main(["learn", "Add /healthz", "--repo", str(target), "--log", str(log), "--accept-all"]) == 0
+
+    agents = (target / "AGENTS.md").read_text(encoding="utf-8")
+    assert agents.count("## Gradient Descent Memory") == 1
+    assert "register the router in app/main.py" in agents
+    assert "pytest tests/api -q" in agents
 
 
 def test_auto_once_prompts_and_reviews(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -219,6 +256,20 @@ def test_learn_reports_missing_log_without_traceback(tmp_path: Path, capsys) -> 
     captured = capsys.readouterr()
     assert result == 2
     assert "Could not read terminal log" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_learn_reports_missing_optimizer_without_traceback(tmp_path: Path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+    monkeypatch.setenv("GRADIENT_DESCENT_MEMORY_OPTIMIZER_COMMAND", "missing-gradient-optimizer")
+
+    result = main(["learn", "broken optimizer", "--repo", str(target)])
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert "command not found" in captured.err
     assert "Traceback" not in captured.err
 
 
@@ -395,3 +446,72 @@ def test_sync_applies_replace_and_delete_memory_edits(tmp_path: Path) -> None:
     assert main(["sync", "--repo", str(target)]) == 0
 
     assert not (target / "AGENTS.md").exists()
+
+
+def test_delete_sync_removes_stale_agent_memory(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+
+    assert main(["init", "--repo", str(target), "--targets", "agents"]) == 0
+    store = MemoryStore(target)
+    store.save_proposal(
+        {
+            "id": "mg_add",
+            "scope": "repo",
+            "operation": "add",
+            "memory": "Run pytest tests/api -q for API route changes.",
+            "confidence": 0.95,
+            "status": "accepted",
+            "created_at": "2026-01-01T00:00:00Z",
+            "accepted_at": "2026-01-01T00:00:00Z",
+        }
+    )
+
+    assert main(["sync", "--repo", str(target)]) == 0
+    assert "Run pytest tests/api -q" in (target / "AGENTS.md").read_text(encoding="utf-8")
+
+    store.save_proposal(
+        {
+            "id": "mg_delete",
+            "scope": "repo",
+            "operation": "delete",
+            "target_memory": "Run pytest tests/api -q for API route changes.",
+            "memory": "Run pytest tests/api -q for API route changes.",
+            "confidence": 0.97,
+            "status": "accepted",
+            "created_at": "2026-01-02T00:00:00Z",
+            "accepted_at": "2026-01-02T00:00:00Z",
+        }
+    )
+
+    assert main(["sync", "--repo", str(target)]) == 0
+    agents = (target / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Run pytest tests/api -q" not in agents
+    assert "## Gradient Descent Memory" not in agents
+
+
+def test_store_loads_only_top_level_memory_bullets(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+    store = MemoryStore(target)
+    store.init()
+    store.memory_path.write_text(
+        "# Gradient Descent Memory\n"
+        "\n"
+        "- Real memory.\n"
+        "  - Operation: add\n"
+        "  - Proposal: mg_real\n",
+        encoding="utf-8",
+    )
+    store.rejected_path.write_text(
+        "# Rejected Memory Edits\n"
+        "\n"
+        "- Rejected memory.\n"
+        "  - Reason: too generic\n",
+        encoding="utf-8",
+    )
+
+    assert store.load_memory_texts() == ["Real memory."]
+    assert store.load_rejected_texts() == ["Rejected memory."]

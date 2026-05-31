@@ -37,15 +37,12 @@ This makes Gradient Descent Memory complementary to SkillOpt rather than a repla
 
 ## System
 
-Gradient Descent Memory runs as:
+Gradient Descent Memory exposes a small public CLI:
 
 ```bash
-gradient-descent-memory init
-gradient-descent-memory start
 gradient-descent-memory learn
-gradient-descent-memory watch
+gradient-descent-memory auto
 gradient-descent-memory review
-gradient-descent-memory sync
 ```
 
 A recorded episode contains:
@@ -54,7 +51,7 @@ A recorded episode contains:
 task -> agent actions -> errors -> fix evidence -> tests pass -> commit or diff
 ```
 
-The easiest path is global-first: `gradient-descent-memory start` writes one global default config and global memory store, and `gradient-descent-memory learn` auto-initializes each repository when it ingests an episode. Global memory captures transferable agent behavior; repo memory captures project-specific behavior.
+The easiest path is `gradient-descent-memory auto`, which prompts periodically while work is happening. `gradient-descent-memory learn` ingests one completed episode. Both commands auto-initialize repository state from global defaults. Global memory captures transferable agent behavior; repo memory captures project-specific behavior.
 
 The MVP records:
 
