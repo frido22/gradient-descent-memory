@@ -2,7 +2,7 @@
 
 ## Abstract
 
-Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. MemoryGrad is a lightweight repo-local system that turns normal coding-agent work into reviewed updates for persistent agent memory. It records coding episodes, extracts high-signal lessons from failures and fixes, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and `.memorygrad/memory.md`.
+Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. MemoryGrad is a lightweight system that turns normal coding-agent work into reviewed updates for persistent global and repo memory. It records coding episodes, asks the coding agent itself to act as a read-only memory optimizer, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `~/.memorygrad/memory.md`, and `.memorygrad/memory.md`.
 
 The design follows the core insight of SkillOpt: skills are external text state for frozen agents and should be improved with the discipline of an optimizer. MemoryGrad narrows that idea to practical software repositories, where the available evidence is terminal output, git diffs, test results, commits, and human or agent fixes.
 
@@ -27,9 +27,9 @@ SkillOpt frames natural-language skills as trainable external state for frozen a
 MemoryGrad adopts the same optimizer mindset but changes the product surface:
 
 - SkillOpt optimizes a skill against benchmark splits.
-- MemoryGrad captures everyday coding sessions inside a live repository.
+- MemoryGrad captures everyday coding sessions inside live repositories.
 - SkillOpt exports a benchmarked `best_skill.md`.
-- MemoryGrad proposes small patches to repo-local agent memory files such as `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/memory.md`.
+- MemoryGrad proposes small patches to global and repo agent memory files such as `~/.memorygrad/memory.md`, `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/memory.md`.
 - SkillOpt is active training.
 - MemoryGrad is passive repo memory with human review.
 
@@ -54,7 +54,7 @@ A recorded episode contains:
 task -> agent actions -> errors -> fix evidence -> tests pass -> commit or diff
 ```
 
-The easiest path is global-first: `memorygrad start` writes one global default config, and `memorygrad learn` auto-initializes each repository when it ingests an episode. This keeps setup independent from any single repo while preserving repo-local accepted memory.
+The easiest path is global-first: `memorygrad start` writes one global default config and global memory store, and `memorygrad learn` auto-initializes each repository when it ingests an episode. Global memory captures transferable agent behavior; repo memory captures project-specific behavior.
 
 The MVP records:
 
@@ -65,13 +65,13 @@ The MVP records:
 - staged diffs
 - latest commit patch
 
-From this evidence it produces a text gradient:
+From this evidence, the configured optimizer agent produces a text gradient:
 
 ```text
 The agent failed because it did not know that API routes in this repo must be registered in app/main.py before the API tests will pass.
 ```
 
-Then it proposes a bounded memory update:
+Then it proposes a bounded add/replace/delete memory edit:
 
 ```text
 When adding or changing an API route, register the route/router in app/main.py and run pytest tests/api -q.
@@ -83,10 +83,11 @@ Repo memory should be sparse. Bad memory is worse than no memory because future 
 
 MemoryGrad therefore uses a high default threshold:
 
-- proposals must clear 90% confidence by default
+- repo proposals must clear 90% confidence by default
+- global proposals must clear 97% confidence by default
 - proposals need failure evidence
 - proposals need a later resolution signal, such as passing tests or explicit fixed/resolved output
-- low-confidence drafts are rejected into `.memorygrad/rejected.md`, outside agent prompt context
+- low-confidence drafts are rejected into repo or global rejected-edit buffers, outside agent prompt context
 - `review --accept-all` still respects the confidence gate unless `--force` is explicit
 - accepted prompt memory is capped to 8 active bullets by default
 
@@ -105,24 +106,27 @@ The default target set is `core`: `AGENTS.md` plus `CLAUDE.md`. Users can switch
 
 ## SkillOpt-Inspired Controls
 
-MemoryGrad implements a small subset of the SkillOpt control loop in a repo-local form:
+MemoryGrad implements a small subset of the SkillOpt control loop for everyday coding work:
 
 - rollout evidence: terminal logs, git status, diffs, test output, and commits
 - textual gradient: a short failure explanation tied to reusable behavior
-- bounded update: one small memory proposal at a time, capped active memory
-- validation gate: high confidence plus failure and resolution evidence
+- bounded update: small add/replace/delete memory proposals, capped active memory
+- optimizer agent: Codex or Claude Code runs in read-only optimizer mode and returns structured JSON
+- validation gate: separate repo and global thresholds plus user review
 - rejected-edit buffer: low-confidence and user-rejected edits retained outside context
 - exported memory artifact: the compact memory block read by the next coding agent
 
-## MVP Heuristics
+## Optimizer Implementation
 
-The current deterministic analyzer handles:
+SkillOpt uses a separate optimizer model to edit the skill document. MemoryGrad makes the product tradeoff the user wanted for coding agents: the installed coding agent can optimize its own external memory artifacts.
 
-- API route registration failures, especially when `tests/api`, 404 output, router diffs, and `app/main.py` evidence line up
-- generic failed-test lessons at lower confidence, useful for review but blocked from default automatic acceptance
-- duplicate avoidance by normalizing accepted and pending memory
+The default optimizer is `auto`:
 
-This keeps the first release inspectable and testable. An LLM-backed proposer can later sit behind the same review gate.
+- use Codex when `codex` is available
+- otherwise use Claude Code when `claude` is available
+- otherwise use `MEMORYGRAD_OPTIMIZER_COMMAND`
+
+MemoryGrad still controls persistence. The optimizer can propose edits, but MemoryGrad applies confidence gates, stores rejected edits, requires review unless `--accept-all` is explicit, and syncs only the accepted active memory into prompt files.
 
 ## Demo
 
@@ -136,7 +140,7 @@ This keeps the first release inspectable and testable. An LLM-backed proposer ca
 
 ## Positioning
 
-MemoryGrad is not a general prompt optimizer. It is not a replacement for SkillOpt. It is a narrow, practical bridge between coding-agent traces and the project memory files that Codex and Claude Code already use.
+MemoryGrad is not a benchmark optimizer. It is not a replacement for SkillOpt. It is a practical bridge between coding-agent traces and the global plus project memory files that Codex and Claude Code already use.
 
 The product bet is simple:
 

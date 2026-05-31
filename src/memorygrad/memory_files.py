@@ -9,45 +9,22 @@ BLOCK_START = "<!-- memorygrad:start -->"
 BLOCK_END = "<!-- memorygrad:end -->"
 
 
-def append_memory_to_files(
-    repo: Path,
-    *,
-    memory: str,
-    text_gradient: str,
-    proposal_id: str,
-    accepted_at: str,
-    accepted_proposals: list[dict[str, object]],
-    target_paths: list[str],
-    max_active_memory: int,
-) -> None:
-    append_memory_to_ledger(
-        repo,
-        memory=memory,
-        text_gradient=text_gradient,
-        proposal_id=proposal_id,
-        accepted_at=accepted_at,
-    )
-    sync_memory_targets(
-        repo,
-        accepted_proposals=accepted_proposals,
-        target_paths=target_paths,
-        max_active_memory=max_active_memory,
-    )
-
-
 def append_memory_to_ledger(
-    repo: Path,
+    path: Path,
     *,
     memory: str,
     text_gradient: str,
     proposal_id: str,
     accepted_at: str,
+    operation: str,
+    target_memory: str,
 ) -> None:
-    path = repo / ".memorygrad" / "memory.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     ledger = path.read_text(encoding="utf-8") if path.exists() else "# MemoryGrad Memory\n"
     entry = (
         f"\n- {memory}\n"
+        f"  - Operation: {operation}\n"
+        f"  - Target: {target_memory}\n"
         f"  - Gradient: {text_gradient}\n"
         f"  - Proposal: {proposal_id}\n"
         f"  - Accepted: {accepted_at}\n"
@@ -58,14 +35,14 @@ def append_memory_to_ledger(
 
 
 def append_rejection_to_buffer(
-    repo: Path,
+    base: Path,
     *,
     proposal_id: str,
     memory: str,
     reason: str,
     rejected_at: str,
 ) -> None:
-    path = repo / ".memorygrad" / "rejected.md"
+    path = base / "rejected.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     content = path.read_text(encoding="utf-8") if path.exists() else "# MemoryGrad Rejected Edits\n"
     if f"  - Proposal: {proposal_id}\n" in content:
@@ -112,19 +89,26 @@ def sync_memory_block(content: str, memories: list[str]) -> str:
 
 
 def _active_memory_texts(proposals: list[dict[str, object]], max_active_memory: int) -> list[str]:
-    ordered = sorted(proposals, key=_proposal_sort_key, reverse=True)
-    selected: list[str] = []
+    ordered = sorted(proposals, key=_proposal_sort_key)
+    active: list[str] = []
     seen: set[str] = set()
     for proposal in ordered:
+        operation = str(proposal.get("operation") or "add")
         memory = proposal_memory(proposal)
+        target_memory = str(proposal.get("target_memory") or "").strip()
         normalized = _normalize(memory)
+        target_normalized = _normalize(target_memory)
+
+        if operation in {"replace", "delete"} and target_normalized:
+            active = [item for item in active if _normalize(item) != target_normalized]
+            seen.discard(target_normalized)
+        if operation == "delete":
+            continue
         if not memory or normalized in seen:
             continue
         seen.add(normalized)
-        selected.append(memory)
-        if len(selected) >= max_active_memory:
-            break
-    return list(reversed(selected))
+        active.append(memory)
+    return active[-max_active_memory:]
 
 
 def proposal_memory(proposal: dict[str, object]) -> str:

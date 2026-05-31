@@ -6,18 +6,22 @@ import sys
 import time
 from pathlib import Path
 
-from .analyzer import analyze_episode
 from .config import (
+    DEFAULT_GLOBAL_MIN_CONFIDENCE,
     DEFAULT_MAX_ACTIVE_MEMORY,
+    DEFAULT_MAX_EDITS_PER_EPISODE,
     DEFAULT_MIN_CONFIDENCE,
+    DEFAULT_OPTIMIZER,
     default_config,
     load_global_config,
     resolve_targets,
     save_global_config,
 )
 from .git_tools import collect_git_snapshot, discover_repo
-from .memory_files import append_memory_to_files, append_rejection_to_buffer, proposal_memory, sync_memory_targets
-from .store import MemoryStore, make_episode, utc_now
+from .memory_files import append_memory_to_ledger, append_rejection_to_buffer, proposal_memory, sync_memory_targets
+from .model import ProposalDraft, normalize_memory
+from .optimizer import OptimizerError, propose_memory_edits
+from .store import MemoryStore, global_memory_store, make_episode, utc_now
 
 
 AGENT_CHOICES = ["unknown", "codex", "claude", "gemini", "copilot", "cursor", "other"]
@@ -28,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
+    except OptimizerError as error:
+        print(error, file=sys.stderr)
+        return 2
     except CliError as error:
         print(error, file=sys.stderr)
         return 2
@@ -56,11 +63,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE, help="Default proposal gate.")
     init.add_argument(
+        "--global-min-confidence",
+        type=float,
+        default=DEFAULT_GLOBAL_MIN_CONFIDENCE,
+        help="Default global-memory proposal gate.",
+    )
+    init.add_argument(
         "--max-active-memory",
         dest="max_active_memory",
         type=int,
         default=DEFAULT_MAX_ACTIVE_MEMORY,
         help="Active memory cap.",
+    )
+    init.add_argument("--optimizer", default=DEFAULT_OPTIMIZER, help="Optimizer agent: auto, codex, claude.")
+    init.add_argument("--optimizer-command", default="", help="Custom optimizer command that reads a prompt on stdin.")
+    init.add_argument(
+        "--max-edits",
+        dest="max_edits_per_episode",
+        type=int,
+        default=DEFAULT_MAX_EDITS_PER_EPISODE,
+        help="Maximum proposed memory edits per episode.",
     )
     init.set_defaults(func=cmd_init)
 
@@ -73,11 +95,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     start.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE, help="Default proposal gate.")
     start.add_argument(
+        "--global-min-confidence",
+        type=float,
+        default=DEFAULT_GLOBAL_MIN_CONFIDENCE,
+        help="Default global-memory proposal gate.",
+    )
+    start.add_argument(
         "--max-active-memory",
         dest="max_active_memory",
         type=int,
         default=DEFAULT_MAX_ACTIVE_MEMORY,
         help="Active memory cap.",
+    )
+    start.add_argument("--optimizer", default=DEFAULT_OPTIMIZER, help="Optimizer agent: auto, codex, claude.")
+    start.add_argument("--optimizer-command", default="", help="Custom optimizer command that reads a prompt on stdin.")
+    start.add_argument(
+        "--max-edits",
+        dest="max_edits_per_episode",
+        type=int,
+        default=DEFAULT_MAX_EDITS_PER_EPISODE,
+        help="Maximum proposed memory edits per episode.",
     )
     start.set_defaults(func=cmd_start)
 
@@ -88,6 +125,10 @@ def build_parser() -> argparse.ArgumentParser:
     learn.add_argument("--agent", default="unknown", choices=AGENT_CHOICES, help="Agent label.")
     learn.add_argument("--max-terminal-bytes", type=int, default=80_000, help="Maximum log bytes to ingest.")
     learn.add_argument("--min-confidence", type=float, default=None, help="Override the configured proposal gate.")
+    learn.add_argument("--global-min-confidence", type=float, default=None, help="Override the global-memory gate.")
+    learn.add_argument("--optimizer", default=None, help="Override optimizer agent: auto, codex, claude.")
+    learn.add_argument("--optimizer-command", default=None, help="Custom optimizer command for this run.")
+    learn.add_argument("--max-edits", dest="max_edits_per_episode", type=int, default=None, help="Maximum edits.")
     learn.add_argument("--review", action="store_true", help="Open interactive review after ingesting.")
     learn.add_argument("--accept-all", action="store_true", help="Accept high-confidence proposals after ingesting.")
     learn.set_defaults(func=cmd_learn)
@@ -109,6 +150,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Only save proposals at or above this confidence. Default comes from .memorygrad/config.json.",
     )
+    watch.add_argument("--global-min-confidence", type=float, default=None, help="Override the global-memory gate.")
+    watch.add_argument("--optimizer", default=None, help="Override optimizer agent: auto, codex, claude.")
+    watch.add_argument("--optimizer-command", default=None, help="Custom optimizer command for this run.")
+    watch.add_argument("--max-edits", dest="max_edits_per_episode", type=int, default=None, help="Maximum edits.")
     watch.add_argument("--once", action="store_true", help="Record one snapshot and exit.")
     watch.add_argument("--follow", action="store_true", help="Keep polling until interrupted.")
     watch.add_argument("--interval", type=float, default=10.0, help="Polling interval for --follow.")
@@ -126,6 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Minimum confidence for accepting proposals unless --force is used.",
     )
+    review.add_argument("--global-min-confidence", type=float, default=None, help="Minimum confidence for global memory.")
     review.add_argument("--targets", default=None, help="Override configured sync targets for accepted proposals.")
     review.add_argument(
         "--max-active-memory",
@@ -162,7 +208,11 @@ def cmd_init(args: argparse.Namespace) -> int:
         repo,
         targets=args.targets,
         min_confidence=args.min_confidence,
+        global_min_confidence=args.global_min_confidence,
         max_active_memory=args.max_active_memory,
+        max_edits_per_episode=args.max_edits_per_episode,
+        optimizer=args.optimizer,
+        optimizer_command=args.optimizer_command,
     )
 
 
@@ -171,17 +221,33 @@ def cmd_start(args: argparse.Namespace) -> int:
         if not _valid_confidence(args.min_confidence):
             print("--min-confidence must be between 0 and 1.", file=sys.stderr)
             return 2
+        if not _valid_confidence(args.global_min_confidence):
+            print("--global-min-confidence must be between 0 and 1.", file=sys.stderr)
+            return 2
         if args.max_active_memory < 1:
             print("--max-active-memory must be at least 1.", file=sys.stderr)
+            return 2
+        if args.max_edits_per_episode < 1:
+            print("--max-edits must be at least 1.", file=sys.stderr)
             return 2
 
         config = default_config(targets=resolve_targets(Path.cwd(), args.targets))
         config["min_confidence"] = args.min_confidence
+        config["global_min_confidence"] = args.global_min_confidence
         config["max_active_memory"] = args.max_active_memory
+        config["max_edits_per_episode"] = args.max_edits_per_episode
+        config["optimizer"] = args.optimizer
+        config["optimizer_command"] = args.optimizer_command
+        global_store = global_memory_store()
+        global_store.init(config=config)
         path = save_global_config(config)
         print(f"Started MemoryGrad globally at {path.parent}")
         print(f"Default targets: {', '.join(config['targets']) or '(none)'}")
-        print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_memory']}")
+        print(
+            f"Memory gates: repo {config['min_confidence']:.0%}, global "
+            f"{config['global_min_confidence']:.0%}; active cap: {config['max_active_memory']}"
+        )
+        print(f"Optimizer: {config['optimizer']}")
         print()
         print("In any git repo after an agent run:")
         print('  memorygrad learn "what the agent tried" --log session.log')
@@ -193,7 +259,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         repo,
         targets=args.targets,
         min_confidence=args.min_confidence,
+        global_min_confidence=args.global_min_confidence,
         max_active_memory=args.max_active_memory,
+        max_edits_per_episode=args.max_edits_per_episode,
+        optimizer=args.optimizer,
+        optimizer_command=args.optimizer_command,
     )
     if result == 0:
         print()
@@ -206,13 +276,25 @@ def cmd_start(args: argparse.Namespace) -> int:
 def cmd_learn(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = _ensure_repo_started(repo)
+    global_store = _ensure_global_started()
     config = store.load_config()
     min_confidence = _effective_confidence(args.min_confidence, config)
+    global_min_confidence = _effective_global_confidence(args.global_min_confidence, config)
     if not _valid_confidence(min_confidence):
         print("--min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
+    if not _valid_confidence(global_min_confidence):
+        print("--global-min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
 
-    result = _watch_once(args, repo, store, min_confidence=min_confidence)
+    result = _watch_once(
+        args,
+        repo,
+        store,
+        global_store,
+        min_confidence=min_confidence,
+        global_min_confidence=global_min_confidence,
+    )
     if result != 0 or not (args.review or args.accept_all):
         return result
 
@@ -223,6 +305,7 @@ def cmd_learn(args: argparse.Namespace) -> int:
         accept=[],
         reject=[],
         min_confidence=args.min_confidence,
+        global_min_confidence=args.global_min_confidence,
         targets=None,
         max_active_memory=None,
         force=False,
@@ -241,10 +324,15 @@ def cmd_watch(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
     store.init()
+    global_store = _ensure_global_started()
     config = store.load_config()
     min_confidence = _effective_confidence(args.min_confidence, config)
+    global_min_confidence = _effective_global_confidence(args.global_min_confidence, config)
     if not _valid_confidence(min_confidence):
         print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+    if not _valid_confidence(global_min_confidence):
+        print("--global-min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
 
     if args.follow:
@@ -253,11 +341,25 @@ def cmd_watch(args: argparse.Namespace) -> int:
         while True:
             fingerprint = _snapshot_fingerprint(repo, args.terminal_log)
             if fingerprint != last_fingerprint:
-                _watch_once(args, repo, store, min_confidence=min_confidence)
+                _watch_once(
+                    args,
+                    repo,
+                    store,
+                    global_store,
+                    min_confidence=min_confidence,
+                    global_min_confidence=global_min_confidence,
+                )
                 last_fingerprint = fingerprint
             time.sleep(args.interval)
 
-    return _watch_once(args, repo, store, min_confidence=min_confidence)
+    return _watch_once(
+        args,
+        repo,
+        store,
+        global_store,
+        min_confidence=min_confidence,
+        global_min_confidence=global_min_confidence,
+    )
 
 
 def cmd_review(args: argparse.Namespace) -> int:
@@ -270,26 +372,37 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
+    global_store = _ensure_global_started()
     config = store.load_config()
     min_confidence = _effective_confidence(args.min_confidence, config)
+    global_min_confidence = _effective_global_confidence(args.global_min_confidence, config)
     max_active_memory = _effective_max_active(args.max_active_memory, config)
     target_paths = _effective_targets(args.targets, repo, config)
     if not _valid_confidence(min_confidence):
         print("--min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
+    if not _valid_confidence(global_min_confidence):
+        print("--global-min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
     if max_active_memory < 1:
         print("--max-active-memory must be at least 1.", file=sys.stderr)
         return 2
-    pending = store.list_proposals(status="pending")
+    pending = _pending_proposals(store, global_store)
 
     if not pending:
         print("No pending proposals.")
         return 0
 
     if args.accept_all:
-        eligible, skipped = _split_by_confidence(pending, min_confidence, args.force)
+        eligible, skipped = _split_by_confidence(pending, min_confidence, global_min_confidence, args.force)
         for proposal in eligible:
-            _accept_proposal(store, proposal, target_paths=target_paths, max_active_memory=max_active_memory)
+            _accept_proposal(
+                store,
+                global_store,
+                proposal,
+                target_paths=target_paths,
+                max_active_memory=max_active_memory,
+            )
         print(f"Accepted {len(eligible)} proposal(s).")
         if skipped:
             print(f"Skipped {len(skipped)} below-threshold proposal(s); use --force to accept them.")
@@ -297,20 +410,20 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     if args.reject_all:
         for proposal in pending:
-            _reject_proposal(store, proposal)
+            _reject_proposal(store, global_store, proposal)
         print(f"Rejected {len(pending)} proposal(s).")
         return 0
 
     handled = 0
     for prefix in args.accept:
         proposal = _resolve_proposal(pending, prefix)
-        _require_acceptable(proposal, min_confidence, args.force)
-        _accept_proposal(store, proposal, target_paths=target_paths, max_active_memory=max_active_memory)
+        _require_acceptable(proposal, min_confidence, global_min_confidence, args.force)
+        _accept_proposal(store, global_store, proposal, target_paths=target_paths, max_active_memory=max_active_memory)
         handled += 1
 
     for prefix in args.reject:
         proposal = _resolve_proposal(pending, prefix)
-        _reject_proposal(store, proposal)
+        _reject_proposal(store, global_store, proposal)
         handled += 1
 
     if handled:
@@ -319,8 +432,10 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     return _interactive_review(
         store,
+        global_store,
         pending,
         min_confidence=min_confidence,
+        global_min_confidence=global_min_confidence,
         force=args.force,
         target_paths=target_paths,
         max_active_memory=max_active_memory,
@@ -330,6 +445,7 @@ def cmd_review(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
+    global_store = global_memory_store()
     config = store.load_config()
     episodes = store.list_episodes()
     proposals = store.list_proposals()
@@ -344,14 +460,17 @@ def cmd_status(args: argparse.Namespace) -> int:
     for status, count in sorted(counts.items()):
         print(f"  {status}: {count}")
     print(f"Memory gate: {float(config['min_confidence']):.0%}")
+    print(f"Global memory gate: {float(config['global_min_confidence']):.0%}")
     print(f"Active cap: {config['max_active_memory']}")
     print(f"Targets: {', '.join(config['targets']) or '(none)'}")
+    print(f"Global proposals: {len(global_store.list_proposals())}")
     return 0
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
+    global_store = global_memory_store()
     config = store.load_config()
     max_active_memory = _effective_max_active(args.max_active_memory, config)
     target_paths = _effective_targets(args.targets, repo, config)
@@ -361,7 +480,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     written = sync_memory_targets(
         repo,
-        accepted_proposals=store.list_accepted_proposals(),
+        accepted_proposals=global_store.list_accepted_proposals() + store.list_accepted_proposals(),
         target_paths=target_paths,
         max_active_memory=max_active_memory,
     )
@@ -376,23 +495,41 @@ def _initialize_repo(
     *,
     targets: str,
     min_confidence: float,
+    global_min_confidence: float,
     max_active_memory: int,
+    max_edits_per_episode: int,
+    optimizer: str,
+    optimizer_command: str,
 ) -> int:
     store = MemoryStore(repo)
     if not _valid_confidence(min_confidence):
         print("--min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
+    if not _valid_confidence(global_min_confidence):
+        print("--global-min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
     if max_active_memory < 1:
         print("--max-active-memory must be at least 1.", file=sys.stderr)
+        return 2
+    if max_edits_per_episode < 1:
+        print("--max-edits must be at least 1.", file=sys.stderr)
         return 2
 
     config = default_config(targets=resolve_targets(repo, targets))
     config["min_confidence"] = min_confidence
+    config["global_min_confidence"] = global_min_confidence
     config["max_active_memory"] = max_active_memory
+    config["max_edits_per_episode"] = max_edits_per_episode
+    config["optimizer"] = optimizer
+    config["optimizer_command"] = optimizer_command
     store.init(config=config)
     print(f"Initialized MemoryGrad in {store.root}")
     print(f"Targets: {', '.join(config['targets']) or '(none)'}")
-    print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_memory']}")
+    print(
+        f"Memory gates: repo {config['min_confidence']:.0%}, global "
+        f"{config['global_min_confidence']:.0%}; active cap: {config['max_active_memory']}"
+    )
+    print(f"Optimizer: {config['optimizer']}")
     return 0
 
 
@@ -407,7 +544,47 @@ def _ensure_repo_started(repo: Path) -> MemoryStore:
     return store
 
 
-def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min_confidence: float) -> int:
+def _ensure_global_started() -> MemoryStore:
+    store = global_memory_store()
+    store.init(config=load_global_config())
+    return store
+
+
+def _pending_proposals(store: MemoryStore, global_store: MemoryStore) -> list[dict[str, object]]:
+    proposals = global_store.list_proposals(status="pending") + store.list_proposals(status="pending")
+    return sorted(proposals, key=lambda item: str(item.get("created_at", "")))
+
+
+def _dedupe_drafts(drafts: list[ProposalDraft], store: MemoryStore, global_store: MemoryStore) -> list[ProposalDraft]:
+    existing = {normalize_memory(item) for item in store.load_memory_texts() + global_store.load_memory_texts()}
+    existing.update(
+        normalize_memory(proposal_memory(item))
+        for item in store.list_proposals() + global_store.list_proposals()
+        if proposal_memory(item)
+    )
+    result = []
+    for draft in drafts:
+        memory = draft.memory
+        if draft.operation == "delete":
+            if normalize_memory(draft.target_memory) in existing:
+                result.append(draft)
+            continue
+        if not memory or normalize_memory(memory) in existing:
+            continue
+        existing.add(normalize_memory(memory))
+        result.append(draft)
+    return result
+
+
+def _watch_once(
+    args: argparse.Namespace,
+    repo: Path,
+    store: MemoryStore,
+    global_store: MemoryStore,
+    *,
+    min_confidence: float,
+    global_min_confidence: float,
+) -> int:
     terminal_output = _read_terminal_output(args.terminal_log, args.max_terminal_bytes)
     episode = make_episode(
         repo=repo,
@@ -418,11 +595,29 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min
     )
     store.save_episode(episode)
 
-    existing_memory = store.load_memory_texts()
-    existing_memory.extend(proposal_memory(item) for item in store.list_proposals())
-    drafts = analyze_episode(episode, existing_memory=existing_memory)
-    eligible_drafts = [draft for draft in drafts if draft.confidence >= min_confidence]
-    skipped_drafts = [draft for draft in drafts if draft.confidence < min_confidence]
+    config = store.load_config()
+    max_edits = _effective_max_edits(args.max_edits_per_episode, config)
+    if max_edits < 1:
+        print("--max-edits must be at least 1.", file=sys.stderr)
+        return 2
+
+    drafts = propose_memory_edits(
+        repo=repo,
+        episode=episode,
+        repo_memory=store.load_memory_texts(),
+        global_memory=global_store.load_memory_texts(),
+        rejected_memory=store.load_rejected_texts() + global_store.load_rejected_texts(),
+        max_edits=max_edits,
+        optimizer=_effective_optimizer(args.optimizer, config),
+        optimizer_command=_effective_optimizer_command(args.optimizer_command, config),
+    )
+    drafts = _dedupe_drafts(drafts, store, global_store)
+    eligible_drafts = [
+        draft for draft in drafts if draft.confidence >= _scope_threshold(draft.scope, min_confidence, global_min_confidence)
+    ]
+    skipped_drafts = [
+        draft for draft in drafts if draft.confidence < _scope_threshold(draft.scope, min_confidence, global_min_confidence)
+    ]
 
     saved = []
     for draft in eligible_drafts:
@@ -431,24 +626,29 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min
             "status": "pending",
             "created_at": utc_now(),
             "episode_id": episode["id"],
+            "source_repo": str(repo),
         }
-        if store.save_proposal_if_new(proposal):
+        target_store = _store_for_scope(store, global_store, proposal)
+        if target_store.save_proposal_if_new(proposal):
             saved.append(proposal)
 
     rejected = []
     for draft in skipped_drafts:
         rejected_at = utc_now()
+        threshold = _scope_threshold(draft.scope, min_confidence, global_min_confidence)
         proposal = {
             **draft.to_dict(),
             "status": "rejected_low_confidence",
             "created_at": rejected_at,
             "episode_id": episode["id"],
+            "source_repo": str(repo),
             "rejected_at": rejected_at,
-            "rejection_reason": f"below {min_confidence:.0%} confidence gate",
+            "rejection_reason": f"below {threshold:.0%} {draft.scope} confidence gate",
         }
-        if store.save_proposal_if_new(proposal):
+        target_store = _store_for_scope(store, global_store, proposal)
+        if target_store.save_proposal_if_new(proposal):
             append_rejection_to_buffer(
-                store.root,
+                target_store.base,
                 proposal_id=str(proposal["id"]),
                 memory=proposal_memory(proposal),
                 reason=str(proposal["rejection_reason"]),
@@ -468,7 +668,10 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min
 
     for proposal in saved:
         print()
-        print(f"Proposal {proposal['id']} ({proposal['confidence']:.0%} confidence)")
+        print(
+            f"Proposal {proposal['id']} [{proposal.get('scope', 'repo')}:{proposal.get('operation', 'add')}] "
+            f"({_proposal_confidence(proposal):.0%} confidence)"
+        )
         print(f"Gradient: {proposal['text_gradient']}")
         print(f"Memory: {proposal_memory(proposal)}")
     print()
@@ -476,19 +679,56 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min
     return 0
 
 
+def _store_for_scope(store: MemoryStore, global_store: MemoryStore, proposal: dict[str, object]) -> MemoryStore:
+    if _proposal_scope(proposal) == "global":
+        return global_store
+    return store
+
+
+def _sync_all_memory(
+    store: MemoryStore,
+    global_store: MemoryStore,
+    *,
+    target_paths: list[str],
+    max_active_memory: int,
+) -> None:
+    sync_memory_targets(
+        store.root,
+        accepted_proposals=global_store.list_accepted_proposals() + store.list_accepted_proposals(),
+        target_paths=target_paths,
+        max_active_memory=max_active_memory,
+    )
+
+
+def _proposal_scope(proposal: dict[str, object]) -> str:
+    scope = str(proposal.get("scope") or "repo")
+    return "global" if scope == "global" else "repo"
+
+
+def _scope_threshold(scope: str, min_confidence: float, global_min_confidence: float) -> float:
+    return global_min_confidence if scope == "global" else min_confidence
+
+
 def _interactive_review(
     store: MemoryStore,
+    global_store: MemoryStore,
     pending: list[dict[str, object]],
     *,
     min_confidence: float,
+    global_min_confidence: float,
     force: bool,
     target_paths: list[str],
     max_active_memory: int,
 ) -> int:
     for proposal in pending:
         print()
-        print(f"{proposal['id']} ({_proposal_confidence(proposal):.0%} confidence)")
+        print(
+            f"{proposal['id']} [{proposal.get('scope', 'repo')}:{proposal.get('operation', 'add')}] "
+            f"({_proposal_confidence(proposal):.0%} confidence)"
+        )
         print(f"Gradient: {proposal['text_gradient']}")
+        if proposal.get("target_memory"):
+            print(f"Target: {proposal['target_memory']}")
         print(f"Memory: {proposal_memory(proposal)}")
         for item in proposal.get("evidence", []):
             print(f"Evidence: {item}")
@@ -496,14 +736,21 @@ def _interactive_review(
         while True:
             answer = input("Accept? [a]ccept/[r]eject/[s]kip/[q]uit: ").strip().lower()
             if answer in {"a", "accept"}:
-                if _proposal_confidence(proposal) < min_confidence and not force:
-                    print(f"Skipped: below {min_confidence:.0%} confidence. Re-run with --force to accept.")
+                threshold = _scope_threshold(_proposal_scope(proposal), min_confidence, global_min_confidence)
+                if _proposal_confidence(proposal) < threshold and not force:
+                    print(f"Skipped: below {threshold:.0%} confidence. Re-run with --force to accept.")
                     break
-                _accept_proposal(store, proposal, target_paths=target_paths, max_active_memory=max_active_memory)
+                _accept_proposal(
+                    store,
+                    global_store,
+                    proposal,
+                    target_paths=target_paths,
+                    max_active_memory=max_active_memory,
+                )
                 print("Accepted.")
                 break
             if answer in {"r", "reject"}:
-                _reject_proposal(store, proposal)
+                _reject_proposal(store, global_store, proposal)
                 print("Rejected.")
                 break
             if answer in {"s", "skip", ""}:
@@ -517,6 +764,7 @@ def _interactive_review(
 
 def _accept_proposal(
     store: MemoryStore,
+    global_store: MemoryStore,
     proposal: dict[str, object],
     *,
     target_paths: list[str],
@@ -525,27 +773,29 @@ def _accept_proposal(
     accepted_at = utc_now()
     proposal["status"] = "accepted"
     proposal["accepted_at"] = accepted_at
-    store.save_proposal(proposal)
-    append_memory_to_files(
-        store.root,
+    target_store = _store_for_scope(store, global_store, proposal)
+    target_store.save_proposal(proposal)
+    append_memory_to_ledger(
+        target_store.memory_path,
         memory=proposal_memory(proposal),
         text_gradient=str(proposal["text_gradient"]),
         proposal_id=str(proposal["id"]),
         accepted_at=accepted_at,
-        accepted_proposals=store.list_accepted_proposals(),
-        target_paths=target_paths,
-        max_active_memory=max_active_memory,
+        operation=str(proposal.get("operation") or "add"),
+        target_memory=str(proposal.get("target_memory") or ""),
     )
+    _sync_all_memory(store, global_store, target_paths=target_paths, max_active_memory=max_active_memory)
 
 
-def _reject_proposal(store: MemoryStore, proposal: dict[str, object]) -> None:
+def _reject_proposal(store: MemoryStore, global_store: MemoryStore, proposal: dict[str, object]) -> None:
     rejected_at = utc_now()
     proposal["status"] = "rejected"
     proposal["rejected_at"] = rejected_at
     proposal["rejection_reason"] = "user rejected"
-    store.save_proposal(proposal)
+    target_store = _store_for_scope(store, global_store, proposal)
+    target_store.save_proposal(proposal)
     append_rejection_to_buffer(
-        store.root,
+        target_store.base,
         proposal_id=str(proposal["id"]),
         memory=proposal_memory(proposal),
         reason=str(proposal["rejection_reason"]),
@@ -564,20 +814,33 @@ def _resolve_proposal(pending: list[dict[str, object]], prefix: str) -> dict[str
 
 
 def _split_by_confidence(
-    proposals: list[dict[str, object]], min_confidence: float, force: bool
+    proposals: list[dict[str, object]], min_confidence: float, global_min_confidence: float, force: bool
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if force:
         return proposals, []
-    eligible = [proposal for proposal in proposals if _proposal_confidence(proposal) >= min_confidence]
-    skipped = [proposal for proposal in proposals if _proposal_confidence(proposal) < min_confidence]
+    eligible = [
+        proposal
+        for proposal in proposals
+        if _proposal_confidence(proposal)
+        >= _scope_threshold(_proposal_scope(proposal), min_confidence, global_min_confidence)
+    ]
+    skipped = [
+        proposal
+        for proposal in proposals
+        if _proposal_confidence(proposal)
+        < _scope_threshold(_proposal_scope(proposal), min_confidence, global_min_confidence)
+    ]
     return eligible, skipped
 
 
-def _require_acceptable(proposal: dict[str, object], min_confidence: float, force: bool) -> None:
+def _require_acceptable(
+    proposal: dict[str, object], min_confidence: float, global_min_confidence: float, force: bool
+) -> None:
     confidence = _proposal_confidence(proposal)
-    if confidence < min_confidence and not force:
+    threshold = _scope_threshold(_proposal_scope(proposal), min_confidence, global_min_confidence)
+    if confidence < threshold and not force:
         raise SystemExit(
-            f"Proposal {proposal['id']} is below {min_confidence:.0%} confidence; use --force to accept it."
+            f"Proposal {proposal['id']} is below {threshold:.0%} confidence; use --force to accept it."
         )
 
 
@@ -594,10 +857,34 @@ def _effective_confidence(value: float | None, config: dict[str, object]) -> flo
     return float(config.get("min_confidence", DEFAULT_MIN_CONFIDENCE))
 
 
+def _effective_global_confidence(value: float | None, config: dict[str, object]) -> float:
+    if value is not None:
+        return value
+    return float(config.get("global_min_confidence", DEFAULT_GLOBAL_MIN_CONFIDENCE))
+
+
 def _effective_max_active(value: int | None, config: dict[str, object]) -> int:
     if value is not None:
         return value
     return int(config.get("max_active_memory", DEFAULT_MAX_ACTIVE_MEMORY))
+
+
+def _effective_max_edits(value: int | None, config: dict[str, object]) -> int:
+    if value is not None:
+        return value
+    return int(config.get("max_edits_per_episode", DEFAULT_MAX_EDITS_PER_EPISODE))
+
+
+def _effective_optimizer(value: str | None, config: dict[str, object]) -> str:
+    if value:
+        return value
+    return str(config.get("optimizer") or DEFAULT_OPTIMIZER)
+
+
+def _effective_optimizer_command(value: str | None, config: dict[str, object]) -> str:
+    if value is not None:
+        return value
+    return str(config.get("optimizer_command") or "")
 
 
 def _effective_targets(value: str | None, repo: Path, config: dict[str, object]) -> list[str]:

@@ -8,7 +8,10 @@ from typing import Any
 
 CONFIG_VERSION = 1
 DEFAULT_MIN_CONFIDENCE = 0.90
+DEFAULT_GLOBAL_MIN_CONFIDENCE = 0.97
 DEFAULT_MAX_ACTIVE_MEMORY = 8
+DEFAULT_MAX_EDITS_PER_EPISODE = 2
+DEFAULT_OPTIMIZER = "auto"
 
 AGENT_TARGETS = {
     "agents": "AGENTS.md",
@@ -25,7 +28,11 @@ def default_config(*, targets: list[str] | None = None) -> dict[str, Any]:
     return {
         "version": CONFIG_VERSION,
         "min_confidence": DEFAULT_MIN_CONFIDENCE,
+        "global_min_confidence": DEFAULT_GLOBAL_MIN_CONFIDENCE,
         "max_active_memory": DEFAULT_MAX_ACTIVE_MEMORY,
+        "max_edits_per_episode": DEFAULT_MAX_EDITS_PER_EPISODE,
+        "optimizer": DEFAULT_OPTIMIZER,
+        "optimizer_command": "",
         "targets": list(CORE_TARGETS if targets is None else targets),
     }
 
@@ -76,6 +83,10 @@ def global_config_path() -> Path:
     return Path.home() / ".memorygrad" / "config.json"
 
 
+def global_home() -> Path:
+    return global_config_path().parent
+
+
 def resolve_targets(repo: Path, value: str | list[str] | None) -> list[str]:
     if value is None:
         return list(CORE_TARGETS)
@@ -109,7 +120,15 @@ def _normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized.update(config)
     normalized["version"] = CONFIG_VERSION
     normalized["min_confidence"] = _clamp_float(normalized.get("min_confidence"), DEFAULT_MIN_CONFIDENCE)
+    normalized["global_min_confidence"] = _clamp_float(
+        normalized.get("global_min_confidence"), DEFAULT_GLOBAL_MIN_CONFIDENCE
+    )
     normalized["max_active_memory"] = _positive_int(normalized.get("max_active_memory"), DEFAULT_MAX_ACTIVE_MEMORY)
+    normalized["max_edits_per_episode"] = _positive_int(
+        normalized.get("max_edits_per_episode"), DEFAULT_MAX_EDITS_PER_EPISODE
+    )
+    normalized["optimizer"] = str(normalized.get("optimizer") or DEFAULT_OPTIMIZER)
+    normalized["optimizer_command"] = str(normalized.get("optimizer_command") or "")
     targets = normalized.get("targets")
     normalized["targets"] = _dedupe(targets if isinstance(targets, list) else CORE_TARGETS)
     return normalized
