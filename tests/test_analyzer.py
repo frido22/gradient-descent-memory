@@ -27,7 +27,7 @@ diff --git a/app/routes/health.py b/app/routes/health.py
     assert proposals
     assert proposals[0].id.startswith("mg_")
     assert "registered in app/main.py" in proposals[0].text_gradient
-    assert "pytest tests/api -q" in proposals[0].skill
+    assert "pytest tests/api -q" in proposals[0].memory
 
 
 def test_generic_test_proposal_uses_failed_test_target() -> None:
@@ -45,11 +45,11 @@ def test_generic_test_proposal_uses_failed_test_target() -> None:
     proposals = analyze_episode(episode)
 
     assert proposals
-    assert "memorygrad/parser.py" in proposals[0].skill
-    assert "pytest tests/core -q" in proposals[0].skill
+    assert "memorygrad/parser.py" in proposals[0].memory
+    assert "pytest tests/core -q" in proposals[0].memory
 
 
-def test_existing_skills_are_deduplicated() -> None:
+def test_existing_memory_is_deduplicated() -> None:
     episode = {
         "terminal_output": (
             "FAILED tests/core/test_parser.py::test_parse - AssertionError\n"
@@ -59,7 +59,7 @@ def test_existing_skills_are_deduplicated() -> None:
     }
     first = analyze_episode(episode)
 
-    duplicate = analyze_episode(episode, existing_skills=[first[0].skill])
+    duplicate = analyze_episode(episode, existing_memory=[first[0].memory])
 
     assert duplicate == []
 

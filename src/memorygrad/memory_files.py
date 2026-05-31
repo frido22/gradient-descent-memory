@@ -9,20 +9,20 @@ BLOCK_START = "<!-- memorygrad:start -->"
 BLOCK_END = "<!-- memorygrad:end -->"
 
 
-def append_skill_to_memory_files(
+def append_memory_to_files(
     repo: Path,
     *,
-    skill: str,
+    memory: str,
     text_gradient: str,
     proposal_id: str,
     accepted_at: str,
     accepted_proposals: list[dict[str, object]],
     target_paths: list[str],
-    max_active_skills: int,
+    max_active_memory: int,
 ) -> None:
-    append_skill_to_ledger(
+    append_memory_to_ledger(
         repo,
-        skill=skill,
+        memory=memory,
         text_gradient=text_gradient,
         proposal_id=proposal_id,
         accepted_at=accepted_at,
@@ -31,23 +31,23 @@ def append_skill_to_memory_files(
         repo,
         accepted_proposals=accepted_proposals,
         target_paths=target_paths,
-        max_active_skills=max_active_skills,
+        max_active_memory=max_active_memory,
     )
 
 
-def append_skill_to_ledger(
+def append_memory_to_ledger(
     repo: Path,
     *,
-    skill: str,
+    memory: str,
     text_gradient: str,
     proposal_id: str,
     accepted_at: str,
 ) -> None:
-    path = repo / ".memorygrad" / "skills.md"
+    path = repo / ".memorygrad" / "memory.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    ledger = path.read_text(encoding="utf-8") if path.exists() else "# MemoryGrad Skills\n"
+    ledger = path.read_text(encoding="utf-8") if path.exists() else "# MemoryGrad Memory\n"
     entry = (
-        f"\n- {skill}\n"
+        f"\n- {memory}\n"
         f"  - Gradient: {text_gradient}\n"
         f"  - Proposal: {proposal_id}\n"
         f"  - Accepted: {accepted_at}\n"
@@ -61,7 +61,7 @@ def append_rejection_to_buffer(
     repo: Path,
     *,
     proposal_id: str,
-    skill: str,
+    memory: str,
     reason: str,
     rejected_at: str,
 ) -> None:
@@ -71,7 +71,7 @@ def append_rejection_to_buffer(
     if f"  - Proposal: {proposal_id}\n" in content:
         return
     entry = (
-        f"\n- {skill}\n"
+        f"\n- {memory}\n"
         f"  - Proposal: {proposal_id}\n"
         f"  - Reason: {reason}\n"
         f"  - Rejected: {rejected_at}\n"
@@ -84,24 +84,24 @@ def sync_memory_targets(
     *,
     accepted_proposals: list[dict[str, object]],
     target_paths: list[str],
-    max_active_skills: int,
+    max_active_memory: int,
 ) -> list[Path]:
-    active_skills = _active_skill_texts(accepted_proposals, max_active_skills)
-    if not active_skills:
+    active_memory = _active_memory_texts(accepted_proposals, max_active_memory)
+    if not active_memory:
         return []
     written: list[Path] = []
     for target in target_paths:
         path = repo / target
         path.parent.mkdir(parents=True, exist_ok=True)
         content = path.read_text(encoding="utf-8") if path.exists() else _default_content(target)
-        updated = sync_skill_block(content, active_skills)
+        updated = sync_memory_block(content, active_memory)
         path.write_text(updated, encoding="utf-8")
         written.append(path)
     return written
 
 
-def sync_skill_block(content: str, skills: list[str]) -> str:
-    block = _format_skill_block(skills)
+def sync_memory_block(content: str, memories: list[str]) -> str:
+    block = _format_memory_block(memories)
 
     if BLOCK_START not in content or BLOCK_END not in content:
         return content.rstrip() + block
@@ -111,29 +111,33 @@ def sync_skill_block(content: str, skills: list[str]) -> str:
     return f"{block_prefix}{block}{rest.lstrip()}"
 
 
-def append_skill_to_content(content: str, skill: str) -> str:
-    return sync_skill_block(content, [skill])
+def append_memory_to_content(content: str, memory: str) -> str:
+    return sync_memory_block(content, [memory])
 
 
-def _active_skill_texts(proposals: list[dict[str, object]], max_active_skills: int) -> list[str]:
+def _active_memory_texts(proposals: list[dict[str, object]], max_active_memory: int) -> list[str]:
     ordered = sorted(proposals, key=_proposal_sort_key, reverse=True)
     selected: list[str] = []
     seen: set[str] = set()
     for proposal in ordered:
-        skill = str(proposal.get("skill") or "").strip()
-        normalized = _normalize(skill)
-        if not skill or normalized in seen:
+        memory = proposal_memory(proposal)
+        normalized = _normalize(memory)
+        if not memory or normalized in seen:
             continue
         seen.add(normalized)
-        selected.append(skill)
-        if len(selected) >= max_active_skills:
+        selected.append(memory)
+        if len(selected) >= max_active_memory:
             break
     return list(reversed(selected))
 
 
-def _format_skill_block(skills: list[str]) -> str:
+def proposal_memory(proposal: dict[str, object]) -> str:
+    return str(proposal.get("memory") or proposal.get("skill") or "").strip()
+
+
+def _format_memory_block(memories: list[str]) -> str:
     lines = ["", "", BLOCK_TITLE, "", BLOCK_START]
-    lines.extend(f"- {skill}" for skill in skills)
+    lines.extend(f"- {memory}" for memory in memories)
     lines.append(BLOCK_END)
     lines.append("")
     return "\n".join(lines)

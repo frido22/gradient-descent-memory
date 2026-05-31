@@ -2,7 +2,7 @@
 
 ## Abstract
 
-Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. MemoryGrad is a lightweight repo-local system that turns normal coding-agent work into reviewed updates for persistent agent memory. It records coding episodes, extracts high-signal lessons from failures and fixes, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and `.memorygrad/skills.md`.
+Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. MemoryGrad is a lightweight repo-local system that turns normal coding-agent work into reviewed updates for persistent agent memory. It records coding episodes, extracts high-signal lessons from failures and fixes, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and `.memorygrad/memory.md`.
 
 The design follows the core insight of SkillOpt: skills are external text state for frozen agents and should be improved with the discipline of an optimizer. MemoryGrad narrows that idea to practical software repositories, where the available evidence is terminal output, git diffs, test results, commits, and human or agent fixes.
 
@@ -29,7 +29,7 @@ MemoryGrad adopts the same optimizer mindset but changes the product surface:
 - SkillOpt optimizes a skill against benchmark splits.
 - MemoryGrad captures everyday coding sessions inside a live repository.
 - SkillOpt exports a benchmarked `best_skill.md`.
-- MemoryGrad proposes small patches to repo-local agent memory files such as `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/skills.md`.
+- MemoryGrad proposes small patches to repo-local agent memory files such as `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/memory.md`.
 - SkillOpt is active training.
 - MemoryGrad is passive repo memory with human review.
 
@@ -71,7 +71,7 @@ From this evidence it produces a text gradient:
 The agent failed because it did not know that API routes in this repo must be registered in app/main.py before the API tests will pass.
 ```
 
-Then it proposes a bounded skill update:
+Then it proposes a bounded memory update:
 
 ```text
 When adding or changing an API route, register the route/router in app/main.py and run pytest tests/api -q.
@@ -109,10 +109,10 @@ MemoryGrad implements a small subset of the SkillOpt control loop in a repo-loca
 
 - rollout evidence: terminal logs, git status, diffs, test output, and commits
 - textual gradient: a short failure explanation tied to reusable behavior
-- bounded update: one small skill proposal at a time, capped active memory
+- bounded update: one small memory proposal at a time, capped active memory
 - validation gate: high confidence plus failure and resolution evidence
 - rejected-edit buffer: low-confidence and user-rejected edits retained outside context
-- exported skill artifact: the compact memory block read by the next coding agent
+- exported memory artifact: the compact memory block read by the next coding agent
 
 ## MVP Heuristics
 
@@ -120,7 +120,7 @@ The current deterministic analyzer handles:
 
 - API route registration failures, especially when `tests/api`, 404 output, router diffs, and `app/main.py` evidence line up
 - generic failed-test lessons at lower confidence, useful for review but blocked from default automatic acceptance
-- duplicate avoidance by normalizing accepted and pending skills
+- duplicate avoidance by normalizing accepted and pending memory
 
 This keeps the first release inspectable and testable. An LLM-backed proposer can later sit behind the same review gate.
 

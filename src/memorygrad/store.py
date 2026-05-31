@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .analyzer import normalize_skill
+from .analyzer import normalize_memory
 from .config import KNOWN_TARGETS, default_config, load_config, save_config
 
 
@@ -40,7 +40,8 @@ class MemoryStore:
         self.base = self.root / ".memorygrad"
         self.episodes_dir = self.base / "episodes"
         self.proposals_dir = self.base / "proposals"
-        self.skills_path = self.base / "skills.md"
+        self.memory_path = self.base / "memory.md"
+        self.legacy_memory_path = self.base / "skills.md"
         self.config_path = self.base / "config.json"
 
     def init(self, config: dict[str, Any] | None = None) -> None:
@@ -49,8 +50,12 @@ class MemoryStore:
         self._ensure_gitignore()
         if not self.config_path.exists():
             save_config(self.root, config or default_config())
-        if not self.skills_path.exists():
-            self.skills_path.write_text("# MemoryGrad Skills\n", encoding="utf-8")
+        if not self.memory_path.exists():
+            if self.legacy_memory_path.exists():
+                content = self.legacy_memory_path.read_text(encoding="utf-8")
+                self.memory_path.write_text(content.replace("MemoryGrad Skills", "MemoryGrad Memory"), encoding="utf-8")
+            else:
+                self.memory_path.write_text("# MemoryGrad Memory\n", encoding="utf-8")
 
     def load_config(self) -> dict[str, Any]:
         return load_config(self.root)
@@ -84,41 +89,43 @@ class MemoryStore:
     def list_accepted_proposals(self) -> list[dict[str, Any]]:
         return self.list_proposals(status="accepted")
 
-    def load_skill_texts(self) -> list[str]:
+    def load_memory_texts(self) -> list[str]:
         texts: list[str] = []
         target_paths = list(KNOWN_TARGETS)
         for target in self.load_config().get("targets", []):
             if isinstance(target, str) and target not in target_paths:
                 target_paths.append(target)
 
-        for path in [self.root / target for target in target_paths] + [self.skills_path]:
+        memory_paths = [self.memory_path]
+        if self.legacy_memory_path.exists():
+            memory_paths.append(self.legacy_memory_path)
+
+        for path in [self.root / target for target in target_paths] + memory_paths:
             if not path.exists():
                 continue
             for line in path.read_text(encoding="utf-8").splitlines():
                 stripped = line.strip()
                 if stripped.startswith("- "):
                     texts.append(stripped[2:].strip())
-        return list({normalize_skill(text): text for text in texts}.values())
+        return list({normalize_memory(text): text for text in texts}.values())
 
     def _ensure_gitignore(self) -> None:
         path = self.base / ".gitignore"
-        if path.exists():
-            return
-        path.write_text(
-            "\n".join(
-                [
-                    "episodes/",
-                    "proposals/",
-                    "rejected.md",
-                    "",
-                    "!config.json",
-                    "!skills.md",
-                    "!.gitignore",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
+        required = [
+            "episodes/",
+            "proposals/",
+            "rejected.md",
+            "!config.json",
+            "!memory.md",
+            "!skills.md",
+            "!.gitignore",
+        ]
+        existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        lines = list(existing)
+        for item in required:
+            if item not in lines:
+                lines.append(item)
+        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def _read_json_dir(path: Path) -> list[dict[str, Any]]:

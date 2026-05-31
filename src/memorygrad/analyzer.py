@@ -19,7 +19,7 @@ FIX_RE = re.compile(r"(?i)(fixed|resolved|green|all tests pass|now passes)")
 class ProposalDraft:
     id: str
     text_gradient: str
-    skill: str
+    memory: str
     confidence: float
     evidence: list[str]
 
@@ -27,13 +27,13 @@ class ProposalDraft:
         return {
             "id": self.id,
             "text_gradient": self.text_gradient,
-            "skill": self.skill,
+            "memory": self.memory,
             "confidence": self.confidence,
             "evidence": self.evidence,
         }
 
 
-def analyze_episode(episode: dict[str, object], existing_skills: Iterable[str] = ()) -> list[ProposalDraft]:
+def analyze_episode(episode: dict[str, object], existing_memory: Iterable[str] = ()) -> list[ProposalDraft]:
     """Create proposal drafts from one episode.
 
     The MVP uses deterministic heuristics so review output is stable and easy to
@@ -53,10 +53,10 @@ def analyze_episode(episode: dict[str, object], existing_skills: Iterable[str] =
     if not terminal.strip() and not diff.strip() and not status.strip():
         return []
 
-    existing_normalized = {normalize_skill(skill) for skill in existing_skills}
+    existing_normalized = {normalize_memory(memory) for memory in existing_memory}
     candidates = [_route_registration_draft(terminal, diff, status), _generic_test_draft(terminal, diff, status)]
     drafts = [draft for draft in candidates if draft is not None]
-    return [draft for draft in drafts if normalize_skill(draft.skill) not in existing_normalized]
+    return [draft for draft in drafts if normalize_memory(draft.memory) not in existing_normalized]
 
 
 def has_failure(text: str) -> bool:
@@ -101,12 +101,12 @@ def extract_changed_files(status: str, diff: str) -> list[str]:
     return files
 
 
-def normalize_skill(skill: str) -> str:
-    return re.sub(r"\s+", " ", skill.strip().lower())
+def normalize_memory(memory: str) -> str:
+    return re.sub(r"\s+", " ", memory.strip().lower())
 
 
-def proposal_id(skill: str) -> str:
-    digest = hashlib.sha1(normalize_skill(skill).encode("utf-8")).hexdigest()
+def proposal_id(memory: str) -> str:
+    digest = hashlib.sha1(normalize_memory(memory).encode("utf-8")).hexdigest()
     return f"mg_{digest[:12]}"
 
 
@@ -133,7 +133,7 @@ def _route_registration_draft(terminal: str, diff: str, status: str) -> Proposal
     ):
         return None
 
-    skill = "When adding or changing an API route, register the route/router in app/main.py and run pytest tests/api -q."
+    memory = "When adding or changing an API route, register the route/router in app/main.py and run pytest tests/api -q."
     evidence = _evidence(
         terminal=terminal,
         changed_files=changed_files,
@@ -141,12 +141,12 @@ def _route_registration_draft(terminal: str, diff: str, status: str) -> Proposal
         fallback=["API route signals found in terminal output or git diff."],
     )
     return ProposalDraft(
-        id=proposal_id(skill),
+        id=proposal_id(memory),
         text_gradient=(
             "The agent failed because it did not know that API routes in this repo must be "
             "registered in app/main.py before the API tests will pass."
         ),
-        skill=skill,
+        memory=memory,
         confidence=0.9,
         evidence=evidence,
     )
@@ -164,16 +164,16 @@ def _generic_test_draft(terminal: str, diff: str, status: str) -> ProposalDraft 
 
     test_target = _test_target(failed_tests)
     area = f"changes touching {primary_file}"
-    skill = (
+    memory = (
         f"When making {area}, run {test_target} before committing and inspect failures for "
         "repo-specific wiring, fixtures, or registration requirements."
     )
     return ProposalDraft(
-        id=proposal_id(skill),
+        id=proposal_id(memory),
         text_gradient=(
             f"The agent failed because it did not know which repo-specific checks catch regressions for {area}."
         ),
-        skill=skill,
+        memory=memory,
         confidence=0.68,
         evidence=_evidence(
             terminal=terminal,

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .analyzer import analyze_episode
 from .config import (
-    DEFAULT_MAX_ACTIVE_SKILLS,
+    DEFAULT_MAX_ACTIVE_MEMORY,
     DEFAULT_MIN_CONFIDENCE,
     default_config,
     load_global_config,
@@ -16,7 +16,7 @@ from .config import (
     save_global_config,
 )
 from .git_tools import collect_git_snapshot, discover_repo
-from .memory_files import append_rejection_to_buffer, append_skill_to_memory_files, sync_memory_targets
+from .memory_files import append_memory_to_files, append_rejection_to_buffer, proposal_memory, sync_memory_targets
 from .store import MemoryStore, make_episode, utc_now
 
 
@@ -48,7 +48,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Memory targets: core, auto, all, none, or comma-separated aliases/paths. Default: core.",
     )
     init.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE, help="Default proposal gate.")
-    init.add_argument("--max-active-skills", type=int, default=DEFAULT_MAX_ACTIVE_SKILLS, help="Active memory cap.")
+    init.add_argument(
+        "--max-active-memory",
+        dest="max_active_memory",
+        type=int,
+        default=DEFAULT_MAX_ACTIVE_MEMORY,
+        help="Active memory cap.",
+    )
     init.set_defaults(func=cmd_init)
 
     start = sub.add_parser("start", help="One-time easy setup.")
@@ -59,7 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Memory targets: auto, core, agents, all, none, or comma-separated aliases/paths. Default: auto.",
     )
     start.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE, help="Default proposal gate.")
-    start.add_argument("--max-active-skills", type=int, default=DEFAULT_MAX_ACTIVE_SKILLS, help="Active memory cap.")
+    start.add_argument(
+        "--max-active-memory",
+        dest="max_active_memory",
+        type=int,
+        default=DEFAULT_MAX_ACTIVE_MEMORY,
+        help="Active memory cap.",
+    )
     start.set_defaults(func=cmd_start)
 
     learn = sub.add_parser("learn", help="Easy one-shot ingest for a coding session.")
@@ -73,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     learn.add_argument("--accept-all", action="store_true", help="Accept high-confidence proposals after ingesting.")
     learn.set_defaults(func=cmd_learn)
 
-    watch = sub.add_parser("watch", help="Record an episode and propose repo-memory skills.")
+    watch = sub.add_parser("watch", help="Record an episode and propose repo memory.")
     watch.add_argument("--repo", default=".", help="Target repo path.")
     watch.add_argument("--task", default="", help="Task or intent for this coding episode.")
     watch.add_argument(
@@ -108,14 +120,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum confidence for accepting proposals unless --force is used.",
     )
     review.add_argument("--targets", default=None, help="Override configured sync targets for accepted proposals.")
-    review.add_argument("--max-active-skills", type=int, default=None, help="Override configured active memory cap.")
+    review.add_argument(
+        "--max-active-memory",
+        dest="max_active_memory",
+        type=int,
+        default=None,
+        help="Override configured active memory cap.",
+    )
     review.add_argument("--force", action="store_true", help="Allow accepting proposals below --min-confidence.")
     review.set_defaults(func=cmd_review)
 
-    sync = sub.add_parser("sync", help="Rewrite configured agent memory files from accepted skills.")
+    sync = sub.add_parser("sync", help="Rewrite configured agent memory files from accepted memory.")
     sync.add_argument("--repo", default=".", help="Target repo path.")
     sync.add_argument("--targets", default=None, help="Override configured sync targets.")
-    sync.add_argument("--max-active-skills", type=int, default=None, help="Override configured active memory cap.")
+    sync.add_argument(
+        "--max-active-memory",
+        dest="max_active_memory",
+        type=int,
+        default=None,
+        help="Override configured active memory cap.",
+    )
     sync.set_defaults(func=cmd_sync)
 
     status = sub.add_parser("status", help="Show MemoryGrad episode and proposal counts.")
@@ -131,7 +155,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         repo,
         targets=args.targets,
         min_confidence=args.min_confidence,
-        max_active_skills=args.max_active_skills,
+        max_active_memory=args.max_active_memory,
     )
 
 
@@ -140,17 +164,17 @@ def cmd_start(args: argparse.Namespace) -> int:
         if not _valid_confidence(args.min_confidence):
             print("--min-confidence must be between 0 and 1.", file=sys.stderr)
             return 2
-        if args.max_active_skills < 1:
-            print("--max-active-skills must be at least 1.", file=sys.stderr)
+        if args.max_active_memory < 1:
+            print("--max-active-memory must be at least 1.", file=sys.stderr)
             return 2
 
         config = default_config(targets=resolve_targets(Path.cwd(), args.targets))
         config["min_confidence"] = args.min_confidence
-        config["max_active_skills"] = args.max_active_skills
+        config["max_active_memory"] = args.max_active_memory
         path = save_global_config(config)
         print(f"Started MemoryGrad globally at {path.parent}")
         print(f"Default targets: {', '.join(config['targets']) or '(none)'}")
-        print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_skills']}")
+        print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_memory']}")
         print()
         print("In any git repo after an agent run:")
         print('  memorygrad learn "what the agent tried" --log session.log')
@@ -162,7 +186,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         repo,
         targets=args.targets,
         min_confidence=args.min_confidence,
-        max_active_skills=args.max_active_skills,
+        max_active_memory=args.max_active_memory,
     )
     if result == 0:
         print()
@@ -193,7 +217,7 @@ def cmd_learn(args: argparse.Namespace) -> int:
         reject=[],
         min_confidence=args.min_confidence,
         targets=None,
-        max_active_skills=None,
+        max_active_memory=None,
         force=False,
     )
     return cmd_review(review_args)
@@ -241,13 +265,13 @@ def cmd_review(args: argparse.Namespace) -> int:
     store = MemoryStore(repo)
     config = store.load_config()
     min_confidence = _effective_confidence(args.min_confidence, config)
-    max_active_skills = _effective_max_active(args.max_active_skills, config)
+    max_active_memory = _effective_max_active(args.max_active_memory, config)
     target_paths = _effective_targets(args.targets, repo, config)
     if not _valid_confidence(min_confidence):
         print("--min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
-    if max_active_skills < 1:
-        print("--max-active-skills must be at least 1.", file=sys.stderr)
+    if max_active_memory < 1:
+        print("--max-active-memory must be at least 1.", file=sys.stderr)
         return 2
     pending = store.list_proposals(status="pending")
 
@@ -258,7 +282,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     if args.accept_all:
         eligible, skipped = _split_by_confidence(pending, min_confidence, args.force)
         for proposal in eligible:
-            _accept_proposal(store, proposal, target_paths=target_paths, max_active_skills=max_active_skills)
+            _accept_proposal(store, proposal, target_paths=target_paths, max_active_memory=max_active_memory)
         print(f"Accepted {len(eligible)} proposal(s).")
         if skipped:
             print(f"Skipped {len(skipped)} below-threshold proposal(s); use --force to accept them.")
@@ -274,7 +298,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     for prefix in args.accept:
         proposal = _resolve_proposal(pending, prefix)
         _require_acceptable(proposal, min_confidence, args.force)
-        _accept_proposal(store, proposal, target_paths=target_paths, max_active_skills=max_active_skills)
+        _accept_proposal(store, proposal, target_paths=target_paths, max_active_memory=max_active_memory)
         handled += 1
 
     for prefix in args.reject:
@@ -292,7 +316,7 @@ def cmd_review(args: argparse.Namespace) -> int:
         min_confidence=min_confidence,
         force=args.force,
         target_paths=target_paths,
-        max_active_skills=max_active_skills,
+        max_active_memory=max_active_memory,
     )
 
 
@@ -313,7 +337,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     for status, count in sorted(counts.items()):
         print(f"  {status}: {count}")
     print(f"Memory gate: {float(config['min_confidence']):.0%}")
-    print(f"Active cap: {config['max_active_skills']}")
+    print(f"Active cap: {config['max_active_memory']}")
     print(f"Targets: {', '.join(config['targets']) or '(none)'}")
     return 0
 
@@ -322,17 +346,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
     config = store.load_config()
-    max_active_skills = _effective_max_active(args.max_active_skills, config)
+    max_active_memory = _effective_max_active(args.max_active_memory, config)
     target_paths = _effective_targets(args.targets, repo, config)
-    if max_active_skills < 1:
-        print("--max-active-skills must be at least 1.", file=sys.stderr)
+    if max_active_memory < 1:
+        print("--max-active-memory must be at least 1.", file=sys.stderr)
         return 2
 
     written = sync_memory_targets(
         repo,
         accepted_proposals=store.list_accepted_proposals(),
         target_paths=target_paths,
-        max_active_skills=max_active_skills,
+        max_active_memory=max_active_memory,
     )
     print(f"Synced {len(written)} target(s).")
     for path in written:
@@ -345,23 +369,23 @@ def _initialize_repo(
     *,
     targets: str,
     min_confidence: float,
-    max_active_skills: int,
+    max_active_memory: int,
 ) -> int:
     store = MemoryStore(repo)
     if not _valid_confidence(min_confidence):
         print("--min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
-    if max_active_skills < 1:
-        print("--max-active-skills must be at least 1.", file=sys.stderr)
+    if max_active_memory < 1:
+        print("--max-active-memory must be at least 1.", file=sys.stderr)
         return 2
 
     config = default_config(targets=resolve_targets(repo, targets))
     config["min_confidence"] = min_confidence
-    config["max_active_skills"] = max_active_skills
+    config["max_active_memory"] = max_active_memory
     store.init(config=config)
     print(f"Initialized MemoryGrad in {store.root}")
     print(f"Targets: {', '.join(config['targets']) or '(none)'}")
-    print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_skills']}")
+    print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_memory']}")
     return 0
 
 
@@ -387,9 +411,9 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min
     )
     store.save_episode(episode)
 
-    existing_skills = store.load_skill_texts()
-    existing_skills.extend(str(item.get("skill", "")) for item in store.list_proposals())
-    drafts = analyze_episode(episode, existing_skills=existing_skills)
+    existing_memory = store.load_memory_texts()
+    existing_memory.extend(proposal_memory(item) for item in store.list_proposals())
+    drafts = analyze_episode(episode, existing_memory=existing_memory)
     eligible_drafts = [draft for draft in drafts if draft.confidence >= min_confidence]
     skipped_drafts = [draft for draft in drafts if draft.confidence < min_confidence]
 
@@ -419,7 +443,7 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min
             append_rejection_to_buffer(
                 store.root,
                 proposal_id=str(proposal["id"]),
-                skill=str(proposal["skill"]),
+                memory=proposal_memory(proposal),
                 reason=str(proposal["rejection_reason"]),
                 rejected_at=rejected_at,
             )
@@ -439,7 +463,7 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min
         print()
         print(f"Proposal {proposal['id']} ({proposal['confidence']:.0%} confidence)")
         print(f"Gradient: {proposal['text_gradient']}")
-        print(f"Skill: {proposal['skill']}")
+        print(f"Memory: {proposal_memory(proposal)}")
     print()
     print("Run `memorygrad review` to accept or reject.")
     return 0
@@ -452,13 +476,13 @@ def _interactive_review(
     min_confidence: float,
     force: bool,
     target_paths: list[str],
-    max_active_skills: int,
+    max_active_memory: int,
 ) -> int:
     for proposal in pending:
         print()
         print(f"{proposal['id']} ({_proposal_confidence(proposal):.0%} confidence)")
         print(f"Gradient: {proposal['text_gradient']}")
-        print(f"Skill: {proposal['skill']}")
+        print(f"Memory: {proposal_memory(proposal)}")
         for item in proposal.get("evidence", []):
             print(f"Evidence: {item}")
 
@@ -468,7 +492,7 @@ def _interactive_review(
                 if _proposal_confidence(proposal) < min_confidence and not force:
                     print(f"Skipped: below {min_confidence:.0%} confidence. Re-run with --force to accept.")
                     break
-                _accept_proposal(store, proposal, target_paths=target_paths, max_active_skills=max_active_skills)
+                _accept_proposal(store, proposal, target_paths=target_paths, max_active_memory=max_active_memory)
                 print("Accepted.")
                 break
             if answer in {"r", "reject"}:
@@ -489,21 +513,21 @@ def _accept_proposal(
     proposal: dict[str, object],
     *,
     target_paths: list[str],
-    max_active_skills: int,
+    max_active_memory: int,
 ) -> None:
     accepted_at = utc_now()
     proposal["status"] = "accepted"
     proposal["accepted_at"] = accepted_at
     store.save_proposal(proposal)
-    append_skill_to_memory_files(
+    append_memory_to_files(
         store.root,
-        skill=str(proposal["skill"]),
+        memory=proposal_memory(proposal),
         text_gradient=str(proposal["text_gradient"]),
         proposal_id=str(proposal["id"]),
         accepted_at=accepted_at,
         accepted_proposals=store.list_accepted_proposals(),
         target_paths=target_paths,
-        max_active_skills=max_active_skills,
+        max_active_memory=max_active_memory,
     )
 
 
@@ -516,7 +540,7 @@ def _reject_proposal(store: MemoryStore, proposal: dict[str, object]) -> None:
     append_rejection_to_buffer(
         store.root,
         proposal_id=str(proposal["id"]),
-        skill=str(proposal["skill"]),
+        memory=proposal_memory(proposal),
         reason=str(proposal["rejection_reason"]),
         rejected_at=rejected_at,
     )
@@ -566,7 +590,7 @@ def _effective_confidence(value: float | None, config: dict[str, object]) -> flo
 def _effective_max_active(value: int | None, config: dict[str, object]) -> int:
     if value is not None:
         return value
-    return int(config.get("max_active_skills", DEFAULT_MAX_ACTIVE_SKILLS))
+    return int(config.get("max_active_memory", DEFAULT_MAX_ACTIVE_MEMORY))
 
 
 def _effective_targets(value: str | None, repo: Path, config: dict[str, object]) -> list[str]:

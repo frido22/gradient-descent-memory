@@ -8,7 +8,7 @@ MemoryGrad watches coding-agent sessions, turns failures and fixes into textual 
 - `CLAUDE.md`
 - `GEMINI.md`
 - `.github/copilot-instructions.md`
-- `.memorygrad/skills.md`
+- `.memorygrad/memory.md`
 
 Tagline:
 
@@ -16,11 +16,11 @@ Tagline:
 
 ## Why This Exists
 
-[SkillOpt](https://arxiv.org/abs/2605.23904) gives the right research framing: treat a natural-language skill document as trainable external state for a frozen agent, then improve it with rollout evidence, bounded edits, validation gates, and rejected-edit memory. The [SkillOpt repo](https://github.com/microsoft/SkillOpt) is a full benchmark optimizer that trains and evaluates `best_skill.md` artifacts.
+[SkillOpt](https://arxiv.org/abs/2605.23904) gives the right research framing: treat a natural-language instruction document as trainable external state for a frozen agent, then improve it with rollout evidence, bounded edits, validation gates, and rejected-edit memory. The [SkillOpt repo](https://github.com/microsoft/SkillOpt) is a full benchmark optimizer that trains and evaluates `best_skill.md` artifacts.
 
 MemoryGrad is the repo-local product version of that idea for everyday coding work. It does not try to run a benchmark suite first. It watches normal Codex and Claude Code sessions, extracts only high-signal lessons from failures plus fixes, and proposes small reviewed patches to the memory files agents already read.
 
-Use SkillOpt to train benchmarked skills. Use MemoryGrad to keep a real repository's agent memory improving as work happens.
+Use SkillOpt for benchmark optimization. Use MemoryGrad to keep a real repository's agent memory improving as work happens.
 
 For the paper-style framing, see [PAPER.md](PAPER.md).
 
@@ -35,7 +35,7 @@ The MVP targets local coding-agent workflows. It does not need agent-specific pr
 - staged diffs
 - the latest commit summary
 
-It then generates a small "text gradient" and a proposed repo skill.
+It then generates a small "text gradient" and a proposed repo memory update.
 
 MemoryGrad is conservative by default. It only saves proposals that clear a 90% confidence threshold, and proposals need evidence of both:
 
@@ -50,7 +50,7 @@ Example gradient:
 The agent failed because it did not know that API routes in this repo must be registered in app/main.py before the API tests will pass.
 ```
 
-Example skill:
+Example memory:
 
 ```text
 When adding or changing an API route, register the route/router in app/main.py and run pytest tests/api -q.
@@ -90,13 +90,13 @@ For a non-interactive demo:
 memorygrad learn "Add /healthz" --repo /path/to/repo --log /path/to/session.log --accept-all
 ```
 
-Accepted skills are written to the configured targets, usually:
+Accepted memory is written to the configured targets, usually:
 
 - `/path/to/repo/AGENTS.md`
 - `/path/to/repo/CLAUDE.md`
-- `/path/to/repo/.memorygrad/skills.md`
+- `/path/to/repo/.memorygrad/memory.md`
 
-The full accepted history stays in `.memorygrad/skills.md`; the active memory files are rewritten from the latest accepted skills under the configured cap.
+The full accepted history stays in `.memorygrad/memory.md`; the active memory files are rewritten from the latest accepted memory under the configured cap.
 
 ## Commands
 
@@ -107,7 +107,7 @@ Creates global defaults once. This does not need to run inside a repo.
 ```bash
 memorygrad start
 memorygrad start --targets agents
-memorygrad start --targets core --min-confidence 0.90 --max-active-skills 8
+memorygrad start --targets core --min-confidence 0.90 --max-active-memory 8
 ```
 
 Global start defaults to `auto`, which uses existing known memory files when present and otherwise starts with `AGENTS.md` only.
@@ -128,7 +128,7 @@ Advanced per-repo setup. Most users can use `memorygrad start` globally and skip
 
 ```bash
 memorygrad init --repo /path/to/repo
-memorygrad init --repo /path/to/repo --targets core --min-confidence 0.90 --max-active-skills 8
+memorygrad init --repo /path/to/repo --targets core --min-confidence 0.90 --max-active-memory 8
 ```
 
 Target modes:
@@ -141,7 +141,7 @@ Target modes:
 
 ### `memorygrad watch`
 
-Records an episode snapshot and proposes skills when it sees a failure plus a likely fix.
+Records an episode snapshot and proposes memory when it sees a failure plus a likely fix.
 
 ```bash
 memorygrad watch --repo /path/to/repo --task "Add /version" --terminal-log session.log --once
@@ -182,7 +182,7 @@ Rewrites configured target files from accepted proposals. Use this after changin
 
 ```bash
 memorygrad sync --repo /path/to/repo
-memorygrad sync --repo /path/to/repo --targets agents --max-active-skills 5
+memorygrad sync --repo /path/to/repo --targets agents --max-active-memory 5
 ```
 
 ### `memorygrad status`
@@ -212,10 +212,10 @@ When adding or changing an API route, register the route/router in app/main.py a
 
 The first implementation is intentionally simple and inspectable:
 
-- API-route failures generate route-registration skills only when failures, passing/fixed signals, route errors, and `app/main.py` registration evidence line up.
+- API-route failures generate route-registration memory only when failures, passing/fixed signals, route errors, and `app/main.py` registration evidence line up.
 - Generic test failures are drafted at lower confidence and are not saved by default; they are useful for diagnostics, not automatic memory.
-- Duplicate skills are skipped by normalizing accepted and pending skill text.
+- Duplicate memory is skipped by normalizing accepted and pending memory text.
 - Rejected edits are retained outside prompt context in `.memorygrad/rejected.md`.
-- Accepted prompt context is bounded by `max_active_skills`.
+- Accepted prompt context is bounded by `max_active_memory`.
 
 The next useful step is adding an LLM-backed proposer behind the same review flow.

@@ -8,7 +8,7 @@ from typing import Any
 
 CONFIG_VERSION = 1
 DEFAULT_MIN_CONFIDENCE = 0.90
-DEFAULT_MAX_ACTIVE_SKILLS = 8
+DEFAULT_MAX_ACTIVE_MEMORY = 8
 
 AGENT_TARGETS = {
     "agents": "AGENTS.md",
@@ -25,7 +25,7 @@ def default_config(*, targets: list[str] | None = None) -> dict[str, Any]:
     return {
         "version": CONFIG_VERSION,
         "min_confidence": DEFAULT_MIN_CONFIDENCE,
-        "max_active_skills": DEFAULT_MAX_ACTIVE_SKILLS,
+        "max_active_memory": DEFAULT_MAX_ACTIVE_MEMORY,
         "targets": targets or list(CORE_TARGETS),
     }
 
@@ -109,9 +109,9 @@ def _normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized.update(config)
     normalized["version"] = CONFIG_VERSION
     normalized["min_confidence"] = _clamp_float(normalized.get("min_confidence"), DEFAULT_MIN_CONFIDENCE)
-    normalized["max_active_skills"] = _positive_int(
-        normalized.get("max_active_skills"), DEFAULT_MAX_ACTIVE_SKILLS
-    )
+    max_active_memory = normalized.get("max_active_memory", normalized.get("max_active_skills"))
+    normalized["max_active_memory"] = _positive_int(max_active_memory, DEFAULT_MAX_ACTIVE_MEMORY)
+    normalized.pop("max_active_skills", None)
     targets = normalized.get("targets")
     normalized["targets"] = _dedupe(targets if isinstance(targets, list) else CORE_TARGETS)
     return normalized

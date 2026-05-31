@@ -51,11 +51,11 @@ def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path) -> None:
 
     agents = (target / "AGENTS.md").read_text(encoding="utf-8")
     claude = (target / "CLAUDE.md").read_text(encoding="utf-8")
-    skills = (target / ".memorygrad" / "skills.md").read_text(encoding="utf-8")
+    memory = (target / ".memorygrad" / "memory.md").read_text(encoding="utf-8")
 
     assert "When adding or changing an API route" in agents
     assert "When adding or changing an API route" in claude
-    assert "registered in app/main.py" in skills
+    assert "registered in app/main.py" in memory
 
 
 def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -93,7 +93,7 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
     assert (target / ".memorygrad" / "config.json").exists()
     gitignore = (target / ".memorygrad" / ".gitignore").read_text(encoding="utf-8")
     assert "episodes/" in gitignore
-    assert "!skills.md" in gitignore
+    assert "!memory.md" in gitignore
     assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
     assert not (target / "CLAUDE.md").exists()
 
@@ -170,13 +170,13 @@ def test_sync_respects_targets_and_active_cap(tmp_path: Path) -> None:
     target.mkdir()
     git(target, "init")
 
-    assert main(["init", "--repo", str(target), "--targets", "agents", "--max-active-skills", "1"]) == 0
+    assert main(["init", "--repo", str(target), "--targets", "agents", "--max-active-memory", "1"]) == 0
 
     store = MemoryStore(target)
     store.save_proposal(
         {
             "id": "mg_first",
-            "skill": "First accepted rule.",
+            "memory": "First accepted rule.",
             "text_gradient": "First gradient.",
             "confidence": 0.95,
             "status": "accepted",
@@ -187,7 +187,7 @@ def test_sync_respects_targets_and_active_cap(tmp_path: Path) -> None:
     store.save_proposal(
         {
             "id": "mg_second",
-            "skill": "Second accepted rule.",
+            "memory": "Second accepted rule.",
             "text_gradient": "Second gradient.",
             "confidence": 0.96,
             "status": "accepted",
