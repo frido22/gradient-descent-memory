@@ -12,6 +12,16 @@ Tagline:
 
 > Git commits remember code. MemoryGrad remembers how to work on the code.
 
+## Why This Exists
+
+[SkillOpt](https://arxiv.org/abs/2605.23904) gives the right research framing: treat a natural-language skill document as trainable external state for a frozen agent, then improve it with rollout evidence, bounded edits, validation gates, and rejected-edit memory. The [SkillOpt repo](https://github.com/microsoft/SkillOpt) is a full benchmark optimizer that trains and evaluates `best_skill.md` artifacts.
+
+MemoryGrad is the repo-local product version of that idea for everyday coding work. It does not try to run a benchmark suite first. It watches normal Codex and Claude Code sessions, extracts only high-signal lessons from failures plus fixes, and proposes small reviewed patches to the memory files agents already read.
+
+Use SkillOpt to train benchmarked skills. Use MemoryGrad to keep a real repository's agent memory improving as work happens.
+
+For the paper-style framing, see [PAPER.md](PAPER.md).
+
 ## MVP
 
 The MVP targets local Codex and Claude Code workflows. It does not need agent-specific private APIs. Instead, it records the durable evidence that is already present during normal work:
