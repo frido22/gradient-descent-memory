@@ -12,6 +12,9 @@ from .memory_files import append_skill_to_memory_files
 from .store import MemoryStore, make_episode, utc_now
 
 
+DEFAULT_MIN_CONFIDENCE = 0.80
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -39,6 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--agent", default="unknown", choices=["unknown", "codex", "claude"], help="Agent label.")
     watch.add_argument("--terminal-log", default="", help="Path to terminal/session log. Use '-' for stdin.")
     watch.add_argument("--max-terminal-bytes", type=int, default=80_000, help="Maximum terminal-log bytes to ingest.")
+    watch.add_argument(
+        "--min-confidence",
+        type=float,
+        default=DEFAULT_MIN_CONFIDENCE,
+        help="Only save proposals at or above this confidence. Default: 0.80.",
+    )
     watch.add_argument("--once", action="store_true", help="Record one snapshot and exit.")
     watch.add_argument("--follow", action="store_true", help="Keep polling until interrupted.")
     watch.add_argument("--interval", type=float, default=10.0, help="Polling interval for --follow.")
@@ -50,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--reject-all", action="store_true", help="Reject every pending proposal.")
     review.add_argument("--accept", action="append", default=[], help="Accept a proposal id or id prefix.")
     review.add_argument("--reject", action="append", default=[], help="Reject a proposal id or id prefix.")
+    review.add_argument(
+        "--min-confidence",
+        type=float,
+        default=DEFAULT_MIN_CONFIDENCE,
+        help="Minimum confidence for accepting proposals unless --force is used. Default: 0.80.",
+    )
+    review.add_argument("--force", action="store_true", help="Allow accepting proposals below --min-confidence.")
     review.set_defaults(func=cmd_review)
 
     status = sub.add_parser("status", help="Show MemoryGrad episode and proposal counts.")
@@ -70,6 +86,9 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_watch(args: argparse.Namespace) -> int:
     if args.follow and args.once:
         print("Use either --once or --follow, not both.", file=sys.stderr)
+        return 2
+    if not _valid_confidence(args.min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
         return 2
 
     repo = discover_repo(Path(args.repo))
@@ -93,10 +112,12 @@ def cmd_review(args: argparse.Namespace) -> int:
     if args.accept_all and args.reject_all:
         print("Use either --accept-all or --reject-all, not both.", file=sys.stderr)
         return 2
+    if not _valid_confidence(args.min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
 
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
-    store.init()
     pending = store.list_proposals(status="pending")
 
     if not pending:
@@ -104,9 +125,12 @@ def cmd_review(args: argparse.Namespace) -> int:
         return 0
 
     if args.accept_all:
-        for proposal in pending:
+        eligible, skipped = _split_by_confidence(pending, args.min_confidence, args.force)
+        for proposal in eligible:
             _accept_proposal(store, proposal)
-        print(f"Accepted {len(pending)} proposal(s).")
+        print(f"Accepted {len(eligible)} proposal(s).")
+        if skipped:
+            print(f"Skipped {len(skipped)} below-threshold proposal(s); use --force to accept them.")
         return 0
 
     if args.reject_all:
@@ -118,6 +142,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     handled = 0
     for prefix in args.accept:
         proposal = _resolve_proposal(pending, prefix)
+        _require_acceptable(proposal, args.min_confidence, args.force)
         _accept_proposal(store, proposal)
         handled += 1
 
@@ -130,13 +155,12 @@ def cmd_review(args: argparse.Namespace) -> int:
         print(f"Handled {handled} proposal(s).")
         return 0
 
-    return _interactive_review(store, pending)
+    return _interactive_review(store, pending, min_confidence=args.min_confidence, force=args.force)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
-    store.init()
     episodes = store.list_episodes()
     proposals = store.list_proposals()
     counts: dict[str, int] = {}
@@ -166,9 +190,11 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore) -> int
     existing_skills = store.load_skill_texts()
     existing_skills.extend(str(item.get("skill", "")) for item in store.list_proposals())
     drafts = analyze_episode(episode, existing_skills=existing_skills)
+    eligible_drafts = [draft for draft in drafts if draft.confidence >= args.min_confidence]
+    skipped_drafts = [draft for draft in drafts if draft.confidence < args.min_confidence]
 
     saved = []
-    for draft in drafts:
+    for draft in eligible_drafts:
         proposal = {
             **draft.to_dict(),
             "status": "pending",
@@ -179,8 +205,13 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore) -> int
             saved.append(proposal)
 
     print(f"Recorded episode {episode['id']}")
+    if skipped_drafts:
+        print(
+            f"Skipped {len(skipped_drafts)} low-signal draft(s) below "
+            f"{args.min_confidence:.0%} confidence."
+        )
     if not saved:
-        print("No new proposals.")
+        print("No new high-signal proposals.")
         return 0
 
     for proposal in saved:
@@ -193,10 +224,16 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore) -> int
     return 0
 
 
-def _interactive_review(store: MemoryStore, pending: list[dict[str, object]]) -> int:
+def _interactive_review(
+    store: MemoryStore,
+    pending: list[dict[str, object]],
+    *,
+    min_confidence: float,
+    force: bool,
+) -> int:
     for proposal in pending:
         print()
-        print(f"{proposal['id']}")
+        print(f"{proposal['id']} ({_proposal_confidence(proposal):.0%} confidence)")
         print(f"Gradient: {proposal['text_gradient']}")
         print(f"Skill: {proposal['skill']}")
         for item in proposal.get("evidence", []):
@@ -205,6 +242,9 @@ def _interactive_review(store: MemoryStore, pending: list[dict[str, object]]) ->
         while True:
             answer = input("Accept? [a]ccept/[r]eject/[s]kip/[q]uit: ").strip().lower()
             if answer in {"a", "accept"}:
+                if _proposal_confidence(proposal) < min_confidence and not force:
+                    print(f"Skipped: below {min_confidence:.0%} confidence. Re-run with --force to accept.")
+                    break
                 _accept_proposal(store, proposal)
                 print("Accepted.")
                 break
@@ -249,6 +289,35 @@ def _resolve_proposal(pending: list[dict[str, object]], prefix: str) -> dict[str
         ids = ", ".join(str(proposal["id"]) for proposal in matches)
         raise SystemExit(f"Proposal prefix {prefix!r} is ambiguous: {ids}")
     return matches[0]
+
+
+def _split_by_confidence(
+    proposals: list[dict[str, object]], min_confidence: float, force: bool
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if force:
+        return proposals, []
+    eligible = [proposal for proposal in proposals if _proposal_confidence(proposal) >= min_confidence]
+    skipped = [proposal for proposal in proposals if _proposal_confidence(proposal) < min_confidence]
+    return eligible, skipped
+
+
+def _require_acceptable(proposal: dict[str, object], min_confidence: float, force: bool) -> None:
+    confidence = _proposal_confidence(proposal)
+    if confidence < min_confidence and not force:
+        raise SystemExit(
+            f"Proposal {proposal['id']} is below {min_confidence:.0%} confidence; use --force to accept it."
+        )
+
+
+def _proposal_confidence(proposal: dict[str, object]) -> float:
+    try:
+        return float(proposal.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _valid_confidence(value: float) -> bool:
+    return 0.0 <= value <= 1.0
 
 
 def _read_terminal_output(path: str, max_bytes: int) -> str:

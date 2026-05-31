@@ -6,15 +6,29 @@ from pathlib import Path
 from memorygrad.cli import main
 
 
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=Test User", "-c", "user.email=test@example.com", *args],
+        cwd=repo,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
 def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
-    subprocess.run(["git", "init"], cwd=target, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    git(target, "init")
 
     (target / "app").mkdir()
     (target / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
     (target / "tests").mkdir()
     (target / "tests" / "api").mkdir()
+    (target / "tests" / "api" / "test_health.py").write_text("def test_healthz():\n    pass\n", encoding="utf-8")
+    git(target, "add", ".")
+    git(target, "commit", "-m", "Initial app")
+
     log = target / "session.log"
     log.write_text(
         "FAILED tests/api/test_health.py::test_healthz - assert 404 == 200\n"
@@ -43,6 +57,33 @@ def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path) -> None:
     assert "registered in app/main.py" in skills
 
 
+def test_accept_all_skips_low_confidence_without_force(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+
+    package = target / "memorygrad"
+    package.mkdir()
+    (package / "parser.py").write_text("def parse(raw):\n    return raw\n", encoding="utf-8")
+    git(target, "add", ".")
+    git(target, "commit", "-m", "Initial parser")
+
+    (package / "parser.py").write_text("def parse(raw):\n    return raw.strip()\n", encoding="utf-8")
+    log = target / "session.log"
+    log.write_text(
+        "FAILED tests/core/test_parser.py::test_parse - AssertionError\n"
+        "=========================== 1 passed in 0.19s ===========================\n",
+        encoding="utf-8",
+    )
+
+    assert main(["watch", "--repo", str(target), "--terminal-log", str(log), "--once", "--min-confidence", "0"]) == 0
+    assert main(["review", "--repo", str(target), "--accept-all"]) == 0
+    assert not (target / "AGENTS.md").exists()
+
+    assert main(["review", "--repo", str(target), "--accept-all", "--force"]) == 0
+    assert "When making changes touching memorygrad/parser.py" in (target / "AGENTS.md").read_text(encoding="utf-8")
+
+
 def test_status_on_empty_repo(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     target = tmp_path / "target"
     target.mkdir()
@@ -51,3 +92,4 @@ def test_status_on_empty_repo(tmp_path: Path, capsys) -> None:  # type: ignore[n
     captured = capsys.readouterr()
     assert "Episodes: 0" in captured.out
     assert "Proposals: 0" in captured.out
+    assert not (target / ".memorygrad").exists()

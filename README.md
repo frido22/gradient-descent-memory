@@ -25,6 +25,13 @@ The MVP targets local Codex and Claude Code workflows. It does not need agent-sp
 
 It then generates a small "text gradient" and a proposed repo skill.
 
+MemoryGrad is conservative by default. It only saves proposals that clear an 80% confidence threshold, and proposals need evidence of both:
+
+- a failure or error
+- a later resolution signal, such as passing tests or explicit fixed/resolved output
+
+Low-confidence drafts are skipped instead of being written into repo memory. This keeps `AGENTS.md` and `CLAUDE.md` reserved for lessons that are specific, reusable, and likely to change future agent behavior.
+
 Example gradient:
 
 ```text
@@ -94,6 +101,12 @@ Use `--follow` to keep polling:
 memorygrad watch --repo /path/to/repo --task "Improve API" --terminal-log session.log --follow --interval 10
 ```
 
+The default confidence gate is high:
+
+```bash
+memorygrad watch --repo /path/to/repo --terminal-log session.log --once --min-confidence 0.80
+```
+
 ### `memorygrad review`
 
 Shows pending proposals and lets you accept or reject them.
@@ -103,6 +116,12 @@ memorygrad review --repo /path/to/repo
 memorygrad review --repo /path/to/repo --accept-all
 memorygrad review --repo /path/to/repo --accept mg_abc123
 memorygrad review --repo /path/to/repo --reject mg_abc123
+```
+
+`review --accept-all` also respects the 80% threshold. Use `--force` only when you deliberately want to accept a lower-confidence proposal:
+
+```bash
+memorygrad review --repo /path/to/repo --accept-all --force
 ```
 
 ### `memorygrad status`
@@ -132,8 +151,8 @@ When adding or changing an API route, register the route/router in app/main.py a
 
 The first implementation is intentionally simple and inspectable:
 
-- API-route failures generate route-registration skills when diffs or errors point at `app/main.py`, routers, 404s, or `tests/api`.
-- Test failures generate repo-specific check skills based on failed test paths and changed files.
+- API-route failures generate route-registration skills only when failures, passing/fixed signals, route errors, and `app/main.py` registration evidence line up.
+- Generic test failures are drafted at lower confidence and are not saved by default; they are useful for diagnostics, not automatic memory.
 - Duplicate skills are skipped by normalizing accepted and pending skill text.
 
 The next useful step is adding an LLM-backed proposer behind the same review flow.

@@ -32,7 +32,10 @@ diff --git a/app/routes/health.py b/app/routes/health.py
 
 def test_generic_test_proposal_uses_failed_test_target() -> None:
     episode = {
-        "terminal_output": "FAILED tests/core/test_parser.py::test_parse - AssertionError",
+        "terminal_output": (
+            "FAILED tests/core/test_parser.py::test_parse - AssertionError\n"
+            "=========================== 1 passed in 0.19s ==========================="
+        ),
         "git": {
             "status": " M memorygrad/parser.py",
             "working_tree_diff": "diff --git a/memorygrad/parser.py b/memorygrad/parser.py\n+value = parse(raw)",
@@ -48,7 +51,10 @@ def test_generic_test_proposal_uses_failed_test_target() -> None:
 
 def test_existing_skills_are_deduplicated() -> None:
     episode = {
-        "terminal_output": "FAILED tests/core/test_parser.py::test_parse - AssertionError",
+        "terminal_output": (
+            "FAILED tests/core/test_parser.py::test_parse - AssertionError\n"
+            "=========================== 1 passed in 0.19s ==========================="
+        ),
         "git": {"status": " M memorygrad/parser.py", "working_tree_diff": ""},
     }
     first = analyze_episode(episode)
@@ -56,6 +62,18 @@ def test_existing_skills_are_deduplicated() -> None:
     duplicate = analyze_episode(episode, existing_skills=[first[0].skill])
 
     assert duplicate == []
+
+
+def test_unresolved_failure_does_not_create_memory() -> None:
+    episode = {
+        "terminal_output": "FAILED tests/api/test_health.py::test_healthz - assert 404 == 200",
+        "git": {
+            "status": " M app/main.py",
+            "working_tree_diff": "diff --git a/app/main.py b/app/main.py\n+app.include_router(health_router)",
+        },
+    }
+
+    assert analyze_episode(episode) == []
 
 
 def test_extract_helpers() -> None:

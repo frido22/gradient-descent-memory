@@ -12,6 +12,7 @@ PASS_RE = re.compile(r"(?i)(=+\s*[\d\s,]+passed\b|passed in \d|tests? passed|exi
 FAIL_RE = re.compile(
     r"(?i)(failed|error|traceback|assertionerror|modulenotfounderror|importerror|not found|404|exit code [1-9])"
 )
+FIX_RE = re.compile(r"(?i)(fixed|resolved|green|all tests pass|now passes)")
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,10 @@ def has_success(text: str) -> bool:
     return bool(PASS_RE.search(text))
 
 
+def has_resolution_signal(text: str) -> bool:
+    return has_success(text) or bool(FIX_RE.search(text))
+
+
 def extract_failed_tests(text: str) -> list[str]:
     seen: set[str] = set()
     tests: list[str] = []
@@ -82,9 +87,9 @@ def extract_changed_files(status: str, diff: str) -> list[str]:
     seen: set[str] = set()
 
     for line in status.splitlines():
-        if len(line) < 4:
+        if len(line) < 3:
             continue
-        path = line[3:].strip()
+        path = line[3:].strip() if len(line) > 3 and line[2].isspace() else line[2:].strip()
         if " -> " in path:
             path = path.split(" -> ", 1)[1].strip()
         _append_unique(files, seen, path)
@@ -108,6 +113,7 @@ def proposal_id(skill: str) -> str:
 def _route_registration_draft(terminal: str, diff: str, status: str) -> ProposalDraft | None:
     combined = "\n".join([terminal, diff, status]).lower()
     changed_files = extract_changed_files(status, diff)
+    failed_tests = extract_failed_tests(terminal)
 
     route_signals = [
         "tests/api" in combined,
@@ -118,14 +124,20 @@ def _route_registration_draft(terminal: str, diff: str, status: str) -> Proposal
         "apirouter" in combined,
         "app/main.py" in changed_files or "app/main.py" in combined,
     ]
-    if not has_failure(terminal + "\n" + combined) or sum(bool(signal) for signal in route_signals) < 2:
+    main_registration_signal = "app/main.py" in changed_files or "app.include_router" in combined or "include_router" in combined
+    if (
+        not has_failure(terminal)
+        or not has_resolution_signal(terminal)
+        or not main_registration_signal
+        or sum(bool(signal) for signal in route_signals) < 3
+    ):
         return None
 
     skill = "When adding or changing an API route, register the route/router in app/main.py and run pytest tests/api -q."
     evidence = _evidence(
         terminal=terminal,
         changed_files=changed_files,
-        failed_tests=extract_failed_tests(terminal),
+        failed_tests=failed_tests,
         fallback=["API route signals found in terminal output or git diff."],
     )
     return ProposalDraft(
@@ -135,23 +147,23 @@ def _route_registration_draft(terminal: str, diff: str, status: str) -> Proposal
             "registered in app/main.py before the API tests will pass."
         ),
         skill=skill,
-        confidence=0.82,
+        confidence=0.9,
         evidence=evidence,
     )
 
 
 def _generic_test_draft(terminal: str, diff: str, status: str) -> ProposalDraft | None:
-    if not has_failure(terminal):
+    if not has_failure(terminal) or not has_resolution_signal(terminal):
         return None
 
     changed_files = extract_changed_files(status, diff)
     failed_tests = extract_failed_tests(terminal)
-    if not changed_files and not failed_tests:
+    primary_file = _primary_changed_file(changed_files)
+    if not primary_file or not failed_tests:
         return None
 
-    primary_file = _primary_changed_file(changed_files)
     test_target = _test_target(failed_tests)
-    area = f"changes touching {primary_file}" if primary_file else "changes in this repo"
+    area = f"changes touching {primary_file}"
     skill = (
         f"When making {area}, run {test_target} before committing and inspect failures for "
         "repo-specific wiring, fixtures, or registration requirements."
@@ -162,7 +174,7 @@ def _generic_test_draft(terminal: str, diff: str, status: str) -> ProposalDraft 
             f"The agent failed because it did not know which repo-specific checks catch regressions for {area}."
         ),
         skill=skill,
-        confidence=0.58,
+        confidence=0.68,
         evidence=_evidence(
             terminal=terminal,
             changed_files=changed_files,
@@ -188,10 +200,10 @@ def _test_target(failed_tests: list[str]) -> str:
 
 def _primary_changed_file(changed_files: list[str]) -> str | None:
     for path in changed_files:
-        if not path.startswith("tests/") and path.endswith(".py"):
+        if _is_source_path(path):
             return path
     for path in changed_files:
-        if not path.startswith(".memorygrad/"):
+        if not _is_memory_or_doc_path(path):
             return path
     return None
 
@@ -209,10 +221,20 @@ def _evidence(
     if changed_files:
         items.append(f"Changed files: {', '.join(changed_files[:5])}")
     if has_success(terminal):
-        items.append("Terminal output also contains a passing test signal.")
+        items.append("Resolution: terminal output contains a passing test signal.")
     if not items:
         items.extend(fallback)
     return items
+
+
+def _is_source_path(path: str) -> bool:
+    if _is_memory_or_doc_path(path) or path.startswith("tests/"):
+        return False
+    return path.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb", ".java", ".kt", ".swift"))
+
+
+def _is_memory_or_doc_path(path: str) -> bool:
+    return path.startswith(".memorygrad/") or path in {"AGENTS.md", "CLAUDE.md", "README.md"}
 
 
 def _append_unique(items: list[str], seen: set[str], value: str) -> None:
