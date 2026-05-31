@@ -26,7 +26,7 @@ def default_config(*, targets: list[str] | None = None) -> dict[str, Any]:
         "version": CONFIG_VERSION,
         "min_confidence": DEFAULT_MIN_CONFIDENCE,
         "max_active_memory": DEFAULT_MAX_ACTIVE_MEMORY,
-        "targets": targets or list(CORE_TARGETS),
+        "targets": list(CORE_TARGETS if targets is None else targets),
     }
 
 
@@ -109,9 +109,7 @@ def _normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized.update(config)
     normalized["version"] = CONFIG_VERSION
     normalized["min_confidence"] = _clamp_float(normalized.get("min_confidence"), DEFAULT_MIN_CONFIDENCE)
-    max_active_memory = normalized.get("max_active_memory", normalized.get("max_active_skills"))
-    normalized["max_active_memory"] = _positive_int(max_active_memory, DEFAULT_MAX_ACTIVE_MEMORY)
-    normalized.pop("max_active_skills", None)
+    normalized["max_active_memory"] = _positive_int(normalized.get("max_active_memory"), DEFAULT_MAX_ACTIVE_MEMORY)
     targets = normalized.get("targets")
     normalized["targets"] = _dedupe(targets if isinstance(targets, list) else CORE_TARGETS)
     return normalized

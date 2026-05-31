@@ -22,7 +22,7 @@ def collect_git_snapshot(repo: Path) -> dict[str, str]:
         "working_tree_diff": _git_text(repo, ["diff", "--no-ext-diff", "--", "."]),
         "staged_diff": _git_text(repo, ["diff", "--cached", "--no-ext-diff", "--", "."]),
         "latest_commit": _git_text(repo, ["log", "-1", "--pretty=format:%h %s"]),
-        "latest_commit_diff": _git_text(repo, ["show", "--format=", "--no-ext-diff", "--stat", "HEAD"]),
+        "latest_commit_diff": _git_text(repo, ["show", "--format=", "--no-ext-diff", "HEAD", "--", "."]),
     }
 
 

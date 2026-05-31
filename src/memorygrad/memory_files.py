@@ -111,10 +111,6 @@ def sync_memory_block(content: str, memories: list[str]) -> str:
     return f"{block_prefix}{block}{rest.lstrip()}"
 
 
-def append_memory_to_content(content: str, memory: str) -> str:
-    return sync_memory_block(content, [memory])
-
-
 def _active_memory_texts(proposals: list[dict[str, object]], max_active_memory: int) -> list[str]:
     ordered = sorted(proposals, key=_proposal_sort_key, reverse=True)
     selected: list[str] = []
@@ -132,7 +128,7 @@ def _active_memory_texts(proposals: list[dict[str, object]], max_active_memory: 
 
 
 def proposal_memory(proposal: dict[str, object]) -> str:
-    return str(proposal.get("memory") or proposal.get("skill") or "").strip()
+    return str(proposal.get("memory") or "").strip()
 
 
 def _format_memory_block(memories: list[str]) -> str:

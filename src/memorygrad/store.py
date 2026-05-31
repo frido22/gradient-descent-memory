@@ -41,21 +41,16 @@ class MemoryStore:
         self.episodes_dir = self.base / "episodes"
         self.proposals_dir = self.base / "proposals"
         self.memory_path = self.base / "memory.md"
-        self.legacy_memory_path = self.base / "skills.md"
         self.config_path = self.base / "config.json"
 
     def init(self, config: dict[str, Any] | None = None) -> None:
         self.episodes_dir.mkdir(parents=True, exist_ok=True)
         self.proposals_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_gitignore()
-        if not self.config_path.exists():
+        if config is not None or not self.config_path.exists():
             save_config(self.root, config or default_config())
         if not self.memory_path.exists():
-            if self.legacy_memory_path.exists():
-                content = self.legacy_memory_path.read_text(encoding="utf-8")
-                self.memory_path.write_text(content.replace("MemoryGrad Skills", "MemoryGrad Memory"), encoding="utf-8")
-            else:
-                self.memory_path.write_text("# MemoryGrad Memory\n", encoding="utf-8")
+            self.memory_path.write_text("# MemoryGrad Memory\n", encoding="utf-8")
 
     def load_config(self) -> dict[str, Any]:
         return load_config(self.root)
@@ -96,11 +91,7 @@ class MemoryStore:
             if isinstance(target, str) and target not in target_paths:
                 target_paths.append(target)
 
-        memory_paths = [self.memory_path]
-        if self.legacy_memory_path.exists():
-            memory_paths.append(self.legacy_memory_path)
-
-        for path in [self.root / target for target in target_paths] + memory_paths:
+        for path in [self.root / target for target in target_paths] + [self.memory_path]:
             if not path.exists():
                 continue
             for line in path.read_text(encoding="utf-8").splitlines():
@@ -117,7 +108,6 @@ class MemoryStore:
             "rejected.md",
             "!config.json",
             "!memory.md",
-            "!skills.md",
             "!.gitignore",
         ]
         existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []

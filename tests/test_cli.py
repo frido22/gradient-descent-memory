@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -17,26 +18,31 @@ def git(repo: Path, *args: str) -> None:
     )
 
 
-def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path) -> None:
+def make_route_repo(tmp_path: Path) -> Path:
     target = tmp_path / "target"
     target.mkdir()
     git(target, "init")
 
     (target / "app").mkdir()
     (target / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
-    (target / "tests").mkdir()
-    (target / "tests" / "api").mkdir()
+    (target / "tests" / "api").mkdir(parents=True)
     (target / "tests" / "api" / "test_health.py").write_text("def test_healthz():\n    pass\n", encoding="utf-8")
     git(target, "add", ".")
     git(target, "commit", "-m", "Initial app")
+    return target
 
+
+def write_route_log(target: Path) -> Path:
     log = target / "session.log"
     log.write_text(
         "FAILED tests/api/test_health.py::test_healthz - assert 404 == 200\n"
         "=========================== 1 passed in 0.19s ===========================\n",
         encoding="utf-8",
     )
+    return log
 
+
+def register_health_route(target: Path) -> None:
     (target / "app" / "main.py").write_text(
         "from fastapi import FastAPI\n"
         "from app.routes.health import router as health_router\n"
@@ -44,6 +50,12 @@ def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path) -> None:
         "app.include_router(health_router)\n",
         encoding="utf-8",
     )
+
+
+def test_watch_and_accept_all_writes_agent_memory(tmp_path: Path) -> None:
+    target = make_route_repo(tmp_path)
+    log = write_route_log(target)
+    register_health_route(target)
 
     assert main(["init", "--repo", str(target)]) == 0
     assert main(["watch", "--repo", str(target), "--task", "Add /healthz", "--terminal-log", str(log), "--once"]) == 0
@@ -62,31 +74,9 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
     monkeypatch.setenv("MEMORYGRAD_HOME", str(tmp_path / "home"))
     assert main(["start", "--targets", "agents"]) == 0
 
-    target = tmp_path / "target"
-    target.mkdir()
-    git(target, "init")
-
-    (target / "app").mkdir()
-    (target / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
-    (target / "tests").mkdir()
-    (target / "tests" / "api").mkdir()
-    (target / "tests" / "api" / "test_health.py").write_text("def test_healthz():\n    pass\n", encoding="utf-8")
-    git(target, "add", ".")
-    git(target, "commit", "-m", "Initial app")
-
-    log = target / "session.log"
-    log.write_text(
-        "FAILED tests/api/test_health.py::test_healthz - assert 404 == 200\n"
-        "=========================== 1 passed in 0.19s ===========================\n",
-        encoding="utf-8",
-    )
-    (target / "app" / "main.py").write_text(
-        "from fastapi import FastAPI\n"
-        "from app.routes.health import router as health_router\n"
-        "app = FastAPI()\n"
-        "app.include_router(health_router)\n",
-        encoding="utf-8",
-    )
+    target = make_route_repo(tmp_path)
+    log = write_route_log(target)
+    register_health_route(target)
 
     assert main(["learn", "Add /healthz", "--repo", str(target), "--log", str(log), "--accept-all"]) == 0
 
@@ -96,6 +86,51 @@ def test_global_start_then_learn_initializes_repo(tmp_path: Path, monkeypatch) -
     assert "!memory.md" in gitignore
     assert "When adding or changing an API route" in (target / "AGENTS.md").read_text(encoding="utf-8")
     assert not (target / "CLAUDE.md").exists()
+
+
+def test_learn_uses_latest_commit_patch(tmp_path: Path) -> None:
+    target = make_route_repo(tmp_path)
+    log = write_route_log(target)
+    register_health_route(target)
+    git(target, "add", "app/main.py")
+    git(target, "commit", "-m", "Register health route")
+
+    assert main(["learn", "Add /healthz", "--repo", str(target), "--log", str(log)]) == 0
+
+    pending = MemoryStore(target).list_proposals(status="pending")
+    assert len(pending) == 1
+    assert "register the route/router in app/main.py" in str(pending[0]["memory"])
+
+
+def test_init_preserves_empty_targets_and_updates_config(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+
+    assert main(["init", "--repo", str(target), "--targets", "none"]) == 0
+    config_path = target / ".memorygrad" / "config.json"
+    assert json.loads(config_path.read_text(encoding="utf-8"))["targets"] == []
+
+    assert main(["init", "--repo", str(target), "--targets", "all"]) == 0
+    assert json.loads(config_path.read_text(encoding="utf-8"))["targets"] == [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        ".github/copilot-instructions.md",
+    ]
+
+
+def test_learn_reports_missing_log_without_traceback(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+
+    result = main(["learn", "broken log", "--repo", str(target), "--log", str(target / "missing.log")])
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert "Could not read terminal log" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_accept_all_skips_low_confidence_without_force(tmp_path: Path) -> None:

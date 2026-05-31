@@ -63,7 +63,7 @@ The MVP records:
 - git status
 - working tree diffs
 - staged diffs
-- latest commit summary
+- latest commit patch
 
 From this evidence it produces a text gradient:
 

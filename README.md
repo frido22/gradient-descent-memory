@@ -33,7 +33,7 @@ The MVP targets local coding-agent workflows. It does not need agent-specific pr
 - git status
 - working-tree diffs
 - staged diffs
-- the latest commit summary
+- the latest commit patch
 
 It then generates a small "text gradient" and a proposed repo memory update.
 

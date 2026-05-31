@@ -28,9 +28,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
+    except CliError as error:
+        print(error, file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         print("\nStopped.", file=sys.stderr)
         return 130
+
+
+class CliError(Exception):
+    """Expected user-facing CLI error."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -612,7 +619,11 @@ def _read_terminal_output(path: str, max_bytes: int) -> str:
     if path == "-":
         data = sys.stdin.buffer.read(max_bytes + 1)
     else:
-        data = Path(path).expanduser().read_bytes()[-max_bytes:]
+        log_path = Path(path).expanduser()
+        try:
+            data = log_path.read_bytes()[-max_bytes:]
+        except OSError as error:
+            raise CliError(f"Could not read terminal log {log_path}: {error.strerror}.") from error
     return data.decode("utf-8", errors="replace")
 
 
