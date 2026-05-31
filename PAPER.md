@@ -2,7 +2,7 @@
 
 ## Abstract
 
-Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. MemoryGrad is a lightweight repo-local system that turns normal Codex and Claude Code work into reviewed updates for persistent agent memory. It records coding episodes, extracts high-signal lessons from failures and fixes, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/skills.md`.
+Coding agents improve code, but most repositories do not improve the agent instructions that guide future coding sessions. MemoryGrad is a lightweight repo-local system that turns normal coding-agent work into reviewed updates for persistent agent memory. It records coding episodes, extracts high-signal lessons from failures and fixes, and proposes bounded text updates for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and `.memorygrad/skills.md`.
 
 The design follows the core insight of SkillOpt: skills are external text state for frozen agents and should be improved with the discipline of an optimizer. MemoryGrad narrows that idea to practical software repositories, where the available evidence is terminal output, git diffs, test results, commits, and human or agent fixes.
 
@@ -29,7 +29,7 @@ MemoryGrad adopts the same optimizer mindset but changes the product surface:
 - SkillOpt optimizes a skill against benchmark splits.
 - MemoryGrad captures everyday coding sessions inside a live repository.
 - SkillOpt exports a benchmarked `best_skill.md`.
-- MemoryGrad proposes small patches to `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/skills.md`.
+- MemoryGrad proposes small patches to repo-local agent memory files such as `AGENTS.md`, `CLAUDE.md`, and `.memorygrad/skills.md`.
 - SkillOpt is active training.
 - MemoryGrad is passive repo memory with human review.
 
@@ -40,8 +40,10 @@ This makes MemoryGrad complementary to SkillOpt rather than a replacement.
 MemoryGrad runs as:
 
 ```bash
+memorygrad init
 memorygrad watch
 memorygrad review
+memorygrad sync
 ```
 
 A recorded episode contains:
@@ -77,13 +79,36 @@ Repo memory should be sparse. Bad memory is worse than no memory because future 
 
 MemoryGrad therefore uses a high default threshold:
 
-- proposals must clear 80% confidence by default
+- proposals must clear 90% confidence by default
 - proposals need failure evidence
 - proposals need a later resolution signal, such as passing tests or explicit fixed/resolved output
-- low-confidence drafts are skipped by default
+- low-confidence drafts are rejected into `.memorygrad/rejected.md`, outside agent prompt context
 - `review --accept-all` still respects the confidence gate unless `--force` is explicit
+- accepted prompt memory is capped to 8 active bullets by default
 
 The goal is not to remember every episode. The goal is to remember only lessons that are specific, reusable, and likely to change future behavior.
+
+## Memory Targets
+
+MemoryGrad treats `AGENTS.md` as the portable baseline for coding agents and supports tool-specific targets for agent runners that read their own project memory files:
+
+- `AGENTS.md` for Codex and general agent instructions
+- `CLAUDE.md` for Claude Code
+- `GEMINI.md` for Gemini CLI-style workflows
+- `.github/copilot-instructions.md` for GitHub Copilot project instructions
+
+The default target set is `core`: `AGENTS.md` plus `CLAUDE.md`. Users can switch to `agents`, `auto`, `all`, or explicit comma-separated paths. The active memory block is rewritten from accepted proposals, so changing targets does not duplicate old entries.
+
+## SkillOpt-Inspired Controls
+
+MemoryGrad implements a small subset of the SkillOpt control loop in a repo-local form:
+
+- rollout evidence: terminal logs, git status, diffs, test output, and commits
+- textual gradient: a short failure explanation tied to reusable behavior
+- bounded update: one small skill proposal at a time, capped active memory
+- validation gate: high confidence plus failure and resolution evidence
+- rejected-edit buffer: low-confidence and user-rejected edits retained outside context
+- exported skill artifact: the compact memory block read by the next coding agent
 
 ## MVP Heuristics
 

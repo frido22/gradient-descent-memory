@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .analyzer import normalize_skill
+from .config import KNOWN_TARGETS, default_config, load_config, save_config
 
 
 def utc_now() -> str:
@@ -40,12 +41,18 @@ class MemoryStore:
         self.episodes_dir = self.base / "episodes"
         self.proposals_dir = self.base / "proposals"
         self.skills_path = self.base / "skills.md"
+        self.config_path = self.base / "config.json"
 
-    def init(self) -> None:
+    def init(self, config: dict[str, Any] | None = None) -> None:
         self.episodes_dir.mkdir(parents=True, exist_ok=True)
         self.proposals_dir.mkdir(parents=True, exist_ok=True)
+        if not self.config_path.exists():
+            save_config(self.root, config or default_config())
         if not self.skills_path.exists():
             self.skills_path.write_text("# MemoryGrad Skills\n", encoding="utf-8")
+
+    def load_config(self) -> dict[str, Any]:
+        return load_config(self.root)
 
     def save_episode(self, episode: dict[str, Any]) -> Path:
         path = self.episodes_dir / f"{episode['id']}.json"
@@ -73,9 +80,17 @@ class MemoryStore:
             proposals = [proposal for proposal in proposals if proposal.get("status") == status]
         return sorted(proposals, key=lambda item: str(item.get("created_at", "")))
 
+    def list_accepted_proposals(self) -> list[dict[str, Any]]:
+        return self.list_proposals(status="accepted")
+
     def load_skill_texts(self) -> list[str]:
         texts: list[str] = []
-        for path in (self.root / "AGENTS.md", self.root / "CLAUDE.md", self.skills_path):
+        target_paths = list(KNOWN_TARGETS)
+        for target in self.load_config().get("targets", []):
+            if isinstance(target, str) and target not in target_paths:
+                target_paths.append(target)
+
+        for path in [self.root / target for target in target_paths] + [self.skills_path]:
             if not path.exists():
                 continue
             for line in path.read_text(encoding="utf-8").splitlines():

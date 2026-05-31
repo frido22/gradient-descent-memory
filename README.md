@@ -1,11 +1,13 @@
 # MemoryGrad
 
-Self improving memory for Codex and Claude Code.
+Passive gradient memory for coding agents.
 
-MemoryGrad watches coding-agent sessions, turns failures and fixes into textual gradients, and proposes reviewed updates for repo memory files:
+MemoryGrad watches coding-agent sessions, turns failures and fixes into textual gradients, and proposes reviewed updates for agent memory files:
 
 - `AGENTS.md`
 - `CLAUDE.md`
+- `GEMINI.md`
+- `.github/copilot-instructions.md`
 - `.memorygrad/skills.md`
 
 Tagline:
@@ -24,7 +26,7 @@ For the paper-style framing, see [PAPER.md](PAPER.md).
 
 ## MVP
 
-The MVP targets local Codex and Claude Code workflows. It does not need agent-specific private APIs. Instead, it records the durable evidence that is already present during normal work:
+The MVP targets local coding-agent workflows. It does not need agent-specific private APIs. Instead, it records the durable evidence that is already present during normal work:
 
 - task text
 - terminal output or saved session logs
@@ -35,12 +37,12 @@ The MVP targets local Codex and Claude Code workflows. It does not need agent-sp
 
 It then generates a small "text gradient" and a proposed repo skill.
 
-MemoryGrad is conservative by default. It only saves proposals that clear an 80% confidence threshold, and proposals need evidence of both:
+MemoryGrad is conservative by default. It only saves proposals that clear a 90% confidence threshold, and proposals need evidence of both:
 
 - a failure or error
 - a later resolution signal, such as passing tests or explicit fixed/resolved output
 
-Low-confidence drafts are skipped instead of being written into repo memory. This keeps `AGENTS.md` and `CLAUDE.md` reserved for lessons that are specific, reusable, and likely to change future agent behavior.
+Low-confidence drafts are written to `.memorygrad/rejected.md`, not to the prompt files. Accepted lessons are kept in a compact active block with a default cap of 8 bullets. This keeps agent context reserved for lessons that are specific, reusable, and likely to change future behavior.
 
 Example gradient:
 
@@ -81,21 +83,32 @@ memorygrad watch --repo /path/to/repo --task "Add /healthz" --terminal-log /path
 memorygrad review --repo /path/to/repo --accept-all
 ```
 
-Accepted skills are appended to:
+Accepted skills are written to:
 
 - `/path/to/repo/AGENTS.md`
 - `/path/to/repo/CLAUDE.md`
 - `/path/to/repo/.memorygrad/skills.md`
 
+The full accepted history stays in `.memorygrad/skills.md`; the active memory files are rewritten from the latest accepted skills under the configured cap.
+
 ## Commands
 
 ### `memorygrad init`
 
-Creates the local `.memorygrad` directory and the skills ledger.
+Creates the local `.memorygrad` directory, config, and skills ledger.
 
 ```bash
 memorygrad init --repo /path/to/repo
+memorygrad init --repo /path/to/repo --targets core --min-confidence 0.90 --max-active-skills 8
 ```
+
+Target modes:
+
+- `core`: `AGENTS.md` plus `CLAUDE.md` for Codex and Claude Code
+- `agents`: only `AGENTS.md`
+- `auto`: existing known target files, or `AGENTS.md` if none exist
+- `all`: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and `.github/copilot-instructions.md`
+- comma-separated aliases or paths, such as `agents,claude,GEMINI.md`
 
 ### `memorygrad watch`
 
@@ -114,7 +127,7 @@ memorygrad watch --repo /path/to/repo --task "Improve API" --terminal-log sessio
 The default confidence gate is high:
 
 ```bash
-memorygrad watch --repo /path/to/repo --terminal-log session.log --once --min-confidence 0.80
+memorygrad watch --repo /path/to/repo --terminal-log session.log --once --min-confidence 0.90
 ```
 
 ### `memorygrad review`
@@ -128,10 +141,19 @@ memorygrad review --repo /path/to/repo --accept mg_abc123
 memorygrad review --repo /path/to/repo --reject mg_abc123
 ```
 
-`review --accept-all` also respects the 80% threshold. Use `--force` only when you deliberately want to accept a lower-confidence proposal:
+`review --accept-all` also respects the 90% threshold. Use `--force` only when you deliberately want to accept a lower-confidence proposal:
 
 ```bash
 memorygrad review --repo /path/to/repo --accept-all --force
+```
+
+### `memorygrad sync`
+
+Rewrites configured target files from accepted proposals. Use this after changing targets or the active memory cap.
+
+```bash
+memorygrad sync --repo /path/to/repo
+memorygrad sync --repo /path/to/repo --targets agents --max-active-skills 5
 ```
 
 ### `memorygrad status`
@@ -164,5 +186,7 @@ The first implementation is intentionally simple and inspectable:
 - API-route failures generate route-registration skills only when failures, passing/fixed signals, route errors, and `app/main.py` registration evidence line up.
 - Generic test failures are drafted at lower confidence and are not saved by default; they are useful for diagnostics, not automatic memory.
 - Duplicate skills are skipped by normalizing accepted and pending skill text.
+- Rejected edits are retained outside prompt context in `.memorygrad/rejected.md`.
+- Accepted prompt context is bounded by `max_active_skills`.
 
 The next useful step is adding an LLM-backed proposer behind the same review flow.

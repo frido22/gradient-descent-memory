@@ -6,13 +6,11 @@ import sys
 import time
 from pathlib import Path
 
-from .analyzer import analyze_episode, normalize_skill
+from .analyzer import analyze_episode
+from .config import DEFAULT_MAX_ACTIVE_SKILLS, DEFAULT_MIN_CONFIDENCE, default_config, resolve_targets
 from .git_tools import collect_git_snapshot, discover_repo
-from .memory_files import append_skill_to_memory_files
+from .memory_files import append_rejection_to_buffer, append_skill_to_memory_files, sync_memory_targets
 from .store import MemoryStore, make_episode, utc_now
-
-
-DEFAULT_MIN_CONFIDENCE = 0.80
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,25 +26,37 @@ def main(argv: list[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="memorygrad",
-        description="Self improving repo memory for Codex and Claude Code.",
+        description="Passive gradient memory for coding agents.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser("init", help="Initialize .memorygrad in a repo.")
     init.add_argument("--repo", default=".", help="Target repo path.")
+    init.add_argument(
+        "--targets",
+        default="core",
+        help="Memory targets: core, auto, all, none, or comma-separated aliases/paths. Default: core.",
+    )
+    init.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE, help="Default proposal gate.")
+    init.add_argument("--max-active-skills", type=int, default=DEFAULT_MAX_ACTIVE_SKILLS, help="Active memory cap.")
     init.set_defaults(func=cmd_init)
 
     watch = sub.add_parser("watch", help="Record an episode and propose repo-memory skills.")
     watch.add_argument("--repo", default=".", help="Target repo path.")
     watch.add_argument("--task", default="", help="Task or intent for this coding episode.")
-    watch.add_argument("--agent", default="unknown", choices=["unknown", "codex", "claude"], help="Agent label.")
+    watch.add_argument(
+        "--agent",
+        default="unknown",
+        choices=["unknown", "codex", "claude", "gemini", "copilot", "cursor", "other"],
+        help="Agent label.",
+    )
     watch.add_argument("--terminal-log", default="", help="Path to terminal/session log. Use '-' for stdin.")
     watch.add_argument("--max-terminal-bytes", type=int, default=80_000, help="Maximum terminal-log bytes to ingest.")
     watch.add_argument(
         "--min-confidence",
         type=float,
-        default=DEFAULT_MIN_CONFIDENCE,
-        help="Only save proposals at or above this confidence. Default: 0.80.",
+        default=None,
+        help="Only save proposals at or above this confidence. Default comes from .memorygrad/config.json.",
     )
     watch.add_argument("--once", action="store_true", help="Record one snapshot and exit.")
     watch.add_argument("--follow", action="store_true", help="Keep polling until interrupted.")
@@ -62,11 +72,19 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument(
         "--min-confidence",
         type=float,
-        default=DEFAULT_MIN_CONFIDENCE,
-        help="Minimum confidence for accepting proposals unless --force is used. Default: 0.80.",
+        default=None,
+        help="Minimum confidence for accepting proposals unless --force is used.",
     )
+    review.add_argument("--targets", default=None, help="Override configured sync targets for accepted proposals.")
+    review.add_argument("--max-active-skills", type=int, default=None, help="Override configured active memory cap.")
     review.add_argument("--force", action="store_true", help="Allow accepting proposals below --min-confidence.")
     review.set_defaults(func=cmd_review)
+
+    sync = sub.add_parser("sync", help="Rewrite configured agent memory files from accepted skills.")
+    sync.add_argument("--repo", default=".", help="Target repo path.")
+    sync.add_argument("--targets", default=None, help="Override configured sync targets.")
+    sync.add_argument("--max-active-skills", type=int, default=None, help="Override configured active memory cap.")
+    sync.set_defaults(func=cmd_sync)
 
     status = sub.add_parser("status", help="Show MemoryGrad episode and proposal counts.")
     status.add_argument("--repo", default=".", help="Target repo path.")
@@ -78,8 +96,20 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_init(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
-    store.init()
+    if not _valid_confidence(args.min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+    if args.max_active_skills < 1:
+        print("--max-active-skills must be at least 1.", file=sys.stderr)
+        return 2
+
+    config = default_config(targets=resolve_targets(repo, args.targets))
+    config["min_confidence"] = args.min_confidence
+    config["max_active_skills"] = args.max_active_skills
+    store.init(config=config)
     print(f"Initialized MemoryGrad in {store.root}")
+    print(f"Targets: {', '.join(config['targets']) or '(none)'}")
+    print(f"Memory gate: {config['min_confidence']:.0%}; active cap: {config['max_active_skills']}")
     return 0
 
 
@@ -94,6 +124,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
     store.init()
+    config = store.load_config()
+    min_confidence = _effective_confidence(args.min_confidence, config)
+    if not _valid_confidence(min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
 
     if args.follow:
         print(f"Watching {repo} every {args.interval:g}s. Press Ctrl-C to stop.")
@@ -101,11 +136,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
         while True:
             fingerprint = _snapshot_fingerprint(repo, args.terminal_log)
             if fingerprint != last_fingerprint:
-                _watch_once(args, repo, store)
+                _watch_once(args, repo, store, min_confidence=min_confidence)
                 last_fingerprint = fingerprint
             time.sleep(args.interval)
 
-    return _watch_once(args, repo, store)
+    return _watch_once(args, repo, store, min_confidence=min_confidence)
 
 
 def cmd_review(args: argparse.Namespace) -> int:
@@ -118,6 +153,16 @@ def cmd_review(args: argparse.Namespace) -> int:
 
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
+    config = store.load_config()
+    min_confidence = _effective_confidence(args.min_confidence, config)
+    max_active_skills = _effective_max_active(args.max_active_skills, config)
+    target_paths = _effective_targets(args.targets, repo, config)
+    if not _valid_confidence(min_confidence):
+        print("--min-confidence must be between 0 and 1.", file=sys.stderr)
+        return 2
+    if max_active_skills < 1:
+        print("--max-active-skills must be at least 1.", file=sys.stderr)
+        return 2
     pending = store.list_proposals(status="pending")
 
     if not pending:
@@ -125,9 +170,9 @@ def cmd_review(args: argparse.Namespace) -> int:
         return 0
 
     if args.accept_all:
-        eligible, skipped = _split_by_confidence(pending, args.min_confidence, args.force)
+        eligible, skipped = _split_by_confidence(pending, min_confidence, args.force)
         for proposal in eligible:
-            _accept_proposal(store, proposal)
+            _accept_proposal(store, proposal, target_paths=target_paths, max_active_skills=max_active_skills)
         print(f"Accepted {len(eligible)} proposal(s).")
         if skipped:
             print(f"Skipped {len(skipped)} below-threshold proposal(s); use --force to accept them.")
@@ -142,8 +187,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     handled = 0
     for prefix in args.accept:
         proposal = _resolve_proposal(pending, prefix)
-        _require_acceptable(proposal, args.min_confidence, args.force)
-        _accept_proposal(store, proposal)
+        _require_acceptable(proposal, min_confidence, args.force)
+        _accept_proposal(store, proposal, target_paths=target_paths, max_active_skills=max_active_skills)
         handled += 1
 
     for prefix in args.reject:
@@ -155,12 +200,20 @@ def cmd_review(args: argparse.Namespace) -> int:
         print(f"Handled {handled} proposal(s).")
         return 0
 
-    return _interactive_review(store, pending, min_confidence=args.min_confidence, force=args.force)
+    return _interactive_review(
+        store,
+        pending,
+        min_confidence=min_confidence,
+        force=args.force,
+        target_paths=target_paths,
+        max_active_skills=max_active_skills,
+    )
 
 
 def cmd_status(args: argparse.Namespace) -> int:
     repo = discover_repo(Path(args.repo))
     store = MemoryStore(repo)
+    config = store.load_config()
     episodes = store.list_episodes()
     proposals = store.list_proposals()
     counts: dict[str, int] = {}
@@ -173,10 +226,35 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"Proposals: {len(proposals)}")
     for status, count in sorted(counts.items()):
         print(f"  {status}: {count}")
+    print(f"Memory gate: {float(config['min_confidence']):.0%}")
+    print(f"Active cap: {config['max_active_skills']}")
+    print(f"Targets: {', '.join(config['targets']) or '(none)'}")
     return 0
 
 
-def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore) -> int:
+def cmd_sync(args: argparse.Namespace) -> int:
+    repo = discover_repo(Path(args.repo))
+    store = MemoryStore(repo)
+    config = store.load_config()
+    max_active_skills = _effective_max_active(args.max_active_skills, config)
+    target_paths = _effective_targets(args.targets, repo, config)
+    if max_active_skills < 1:
+        print("--max-active-skills must be at least 1.", file=sys.stderr)
+        return 2
+
+    written = sync_memory_targets(
+        repo,
+        accepted_proposals=store.list_accepted_proposals(),
+        target_paths=target_paths,
+        max_active_skills=max_active_skills,
+    )
+    print(f"Synced {len(written)} target(s).")
+    for path in written:
+        print(f"  {path.relative_to(repo)}")
+    return 0
+
+
+def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore, *, min_confidence: float) -> int:
     terminal_output = _read_terminal_output(args.terminal_log, args.max_terminal_bytes)
     episode = make_episode(
         repo=repo,
@@ -190,8 +268,8 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore) -> int
     existing_skills = store.load_skill_texts()
     existing_skills.extend(str(item.get("skill", "")) for item in store.list_proposals())
     drafts = analyze_episode(episode, existing_skills=existing_skills)
-    eligible_drafts = [draft for draft in drafts if draft.confidence >= args.min_confidence]
-    skipped_drafts = [draft for draft in drafts if draft.confidence < args.min_confidence]
+    eligible_drafts = [draft for draft in drafts if draft.confidence >= min_confidence]
+    skipped_drafts = [draft for draft in drafts if draft.confidence < min_confidence]
 
     saved = []
     for draft in eligible_drafts:
@@ -204,11 +282,32 @@ def _watch_once(args: argparse.Namespace, repo: Path, store: MemoryStore) -> int
         if store.save_proposal_if_new(proposal):
             saved.append(proposal)
 
+    rejected = []
+    for draft in skipped_drafts:
+        rejected_at = utc_now()
+        proposal = {
+            **draft.to_dict(),
+            "status": "rejected_low_confidence",
+            "created_at": rejected_at,
+            "episode_id": episode["id"],
+            "rejected_at": rejected_at,
+            "rejection_reason": f"below {min_confidence:.0%} confidence gate",
+        }
+        if store.save_proposal_if_new(proposal):
+            append_rejection_to_buffer(
+                store.root,
+                proposal_id=str(proposal["id"]),
+                skill=str(proposal["skill"]),
+                reason=str(proposal["rejection_reason"]),
+                rejected_at=rejected_at,
+            )
+            rejected.append(proposal)
+
     print(f"Recorded episode {episode['id']}")
-    if skipped_drafts:
+    if rejected:
         print(
-            f"Skipped {len(skipped_drafts)} low-signal draft(s) below "
-            f"{args.min_confidence:.0%} confidence."
+            f"Rejected {len(rejected)} low-signal draft(s) below "
+            f"{min_confidence:.0%} confidence."
         )
     if not saved:
         print("No new high-signal proposals.")
@@ -230,6 +329,8 @@ def _interactive_review(
     *,
     min_confidence: float,
     force: bool,
+    target_paths: list[str],
+    max_active_skills: int,
 ) -> int:
     for proposal in pending:
         print()
@@ -245,7 +346,7 @@ def _interactive_review(
                 if _proposal_confidence(proposal) < min_confidence and not force:
                     print(f"Skipped: below {min_confidence:.0%} confidence. Re-run with --force to accept.")
                     break
-                _accept_proposal(store, proposal)
+                _accept_proposal(store, proposal, target_paths=target_paths, max_active_skills=max_active_skills)
                 print("Accepted.")
                 break
             if answer in {"r", "reject"}:
@@ -261,24 +362,42 @@ def _interactive_review(
     return 0
 
 
-def _accept_proposal(store: MemoryStore, proposal: dict[str, object]) -> None:
+def _accept_proposal(
+    store: MemoryStore,
+    proposal: dict[str, object],
+    *,
+    target_paths: list[str],
+    max_active_skills: int,
+) -> None:
     accepted_at = utc_now()
+    proposal["status"] = "accepted"
+    proposal["accepted_at"] = accepted_at
+    store.save_proposal(proposal)
     append_skill_to_memory_files(
         store.root,
         skill=str(proposal["skill"]),
         text_gradient=str(proposal["text_gradient"]),
         proposal_id=str(proposal["id"]),
         accepted_at=accepted_at,
+        accepted_proposals=store.list_accepted_proposals(),
+        target_paths=target_paths,
+        max_active_skills=max_active_skills,
     )
-    proposal["status"] = "accepted"
-    proposal["accepted_at"] = accepted_at
-    store.save_proposal(proposal)
 
 
 def _reject_proposal(store: MemoryStore, proposal: dict[str, object]) -> None:
+    rejected_at = utc_now()
     proposal["status"] = "rejected"
-    proposal["rejected_at"] = utc_now()
+    proposal["rejected_at"] = rejected_at
+    proposal["rejection_reason"] = "user rejected"
     store.save_proposal(proposal)
+    append_rejection_to_buffer(
+        store.root,
+        proposal_id=str(proposal["id"]),
+        skill=str(proposal["skill"]),
+        reason=str(proposal["rejection_reason"]),
+        rejected_at=rejected_at,
+    )
 
 
 def _resolve_proposal(pending: list[dict[str, object]], prefix: str) -> dict[str, object]:
@@ -316,7 +435,28 @@ def _proposal_confidence(proposal: dict[str, object]) -> float:
         return 0.0
 
 
-def _valid_confidence(value: float) -> bool:
+def _effective_confidence(value: float | None, config: dict[str, object]) -> float:
+    if value is not None:
+        return value
+    return float(config.get("min_confidence", DEFAULT_MIN_CONFIDENCE))
+
+
+def _effective_max_active(value: int | None, config: dict[str, object]) -> int:
+    if value is not None:
+        return value
+    return int(config.get("max_active_skills", DEFAULT_MAX_ACTIVE_SKILLS))
+
+
+def _effective_targets(value: str | None, repo: Path, config: dict[str, object]) -> list[str]:
+    if value is not None:
+        return resolve_targets(repo, value)
+    configured = config.get("targets", [])
+    return resolve_targets(repo, configured if isinstance(configured, list) else None)
+
+
+def _valid_confidence(value: float | None) -> bool:
+    if value is None:
+        return True
     return 0.0 <= value <= 1.0
 
 

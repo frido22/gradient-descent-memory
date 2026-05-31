@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "memorygrad"
 version = "0.1.0"
-description = "Self improving repo memory for Codex and Claude Code."
+description = "Passive gradient memory for coding agents."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"

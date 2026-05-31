@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from memorygrad.cli import main
+from memorygrad.store import MemoryStore
 
 
 def git(repo: Path, *args: str) -> None:
@@ -84,6 +85,35 @@ def test_accept_all_skips_low_confidence_without_force(tmp_path: Path) -> None:
     assert "When making changes touching memorygrad/parser.py" in (target / "AGENTS.md").read_text(encoding="utf-8")
 
 
+def test_watch_rejects_low_confidence_by_default(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+
+    package = target / "memorygrad"
+    package.mkdir()
+    (package / "parser.py").write_text("def parse(raw):\n    return raw\n", encoding="utf-8")
+    git(target, "add", ".")
+    git(target, "commit", "-m", "Initial parser")
+
+    (package / "parser.py").write_text("def parse(raw):\n    return raw.strip()\n", encoding="utf-8")
+    log = target / "session.log"
+    log.write_text(
+        "FAILED tests/core/test_parser.py::test_parse - AssertionError\n"
+        "=========================== 1 passed in 0.19s ===========================\n",
+        encoding="utf-8",
+    )
+
+    assert main(["watch", "--repo", str(target), "--terminal-log", str(log), "--once"]) == 0
+
+    store = MemoryStore(target)
+    assert store.list_proposals(status="pending") == []
+    rejected = store.list_proposals(status="rejected_low_confidence")
+    assert len(rejected) == 1
+    assert "below 90% confidence gate" in (target / ".memorygrad" / "rejected.md").read_text(encoding="utf-8")
+    assert not (target / "AGENTS.md").exists()
+
+
 def test_status_on_empty_repo(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     target = tmp_path / "target"
     target.mkdir()
@@ -93,3 +123,42 @@ def test_status_on_empty_repo(tmp_path: Path, capsys) -> None:  # type: ignore[n
     assert "Episodes: 0" in captured.out
     assert "Proposals: 0" in captured.out
     assert not (target / ".memorygrad").exists()
+
+
+def test_sync_respects_targets_and_active_cap(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    git(target, "init")
+
+    assert main(["init", "--repo", str(target), "--targets", "agents", "--max-active-skills", "1"]) == 0
+
+    store = MemoryStore(target)
+    store.save_proposal(
+        {
+            "id": "mg_first",
+            "skill": "First accepted rule.",
+            "text_gradient": "First gradient.",
+            "confidence": 0.95,
+            "status": "accepted",
+            "created_at": "2026-01-01T00:00:00Z",
+            "accepted_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    store.save_proposal(
+        {
+            "id": "mg_second",
+            "skill": "Second accepted rule.",
+            "text_gradient": "Second gradient.",
+            "confidence": 0.96,
+            "status": "accepted",
+            "created_at": "2026-01-02T00:00:00Z",
+            "accepted_at": "2026-01-02T00:00:00Z",
+        }
+    )
+
+    assert main(["sync", "--repo", str(target)]) == 0
+
+    agents = (target / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Second accepted rule." in agents
+    assert "First accepted rule." not in agents
+    assert not (target / "CLAUDE.md").exists()
